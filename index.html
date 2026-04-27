@@ -48,23 +48,17 @@
 
   function slotId(d, t) { return `desk${d+1}_time${t+1}`; }
 
-  // ★ 수정된 슬롯 상태 판별 로직 (새치기 방지 + 예비 3명 빈틈없이 채우기) ★
   function getSlotStatus(data) {
     const regArray = data?.registrations || [];
     const waitArray = data?.waitlist || [];
     const reg = Array.isArray(regArray) ? regArray.length : 0;
     const wait = Array.isArray(waitArray) ? waitArray.length : 0;
     
-    // 정규 자리가 남아있고 대기자도 없을 때만 즉시 확정 가능
     if (reg < MAX_REGULAR && wait === 0) {
       return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
-    } 
-    // 정규가 찼거나 대기자가 있어서 뒤로 줄을 서야 하는 경우 (최대 3명까지)
-    else if (wait < MAX_WAITLIST) {
+    } else if (wait < MAX_WAITLIST) {
       return { type: 'waitlist', label: `예비${wait + 1}`, sub: '대기신청' };
-    } 
-    // 예비 3명까지 모두 꽉 찬 경우
-    else {
+    } else {
       return { type: 'closed', label: '마감', sub: '현장문의' };
     }
   }
@@ -99,7 +93,6 @@
     updateSelectedSummary();
     switchNav('apply'); 
 
-    // 관리자 알림 감시 로직
     onSnapshot(doc(db, "applicants", currentUser.uid), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
@@ -207,15 +200,27 @@
   function toggleSlot(deskIdx, timeIdx) {
     const id = slotId(deskIdx, timeIdx);
     if (getSlotStatus(slotsCache[id] || {}).type === 'closed') return;
+
+    // ★ 유저가 이미 신청(확정/예비)한 상태라면 클릭 방지
+    if (currentUserData?.slots?.includes(id)) {
+      showToast('이미 신청하신 기업/시간대입니다. (마이페이지 확인)', 'error');
+      return;
+    }
+
     if (selectedSlots.has(id)) {
       selectedSlots.delete(id);
     } else {
       if ([...selectedSlots].some(s => s.endsWith(`_time${timeIdx+1}`))) {
         showToast('같은 시간대에는 하나의 기업만 선택할 수 있습니다.', 'error'); return;
       }
-      if (selectedSlots.size >= MAX_PER_PERSON) {
-        showToast(`최대 ${MAX_PER_PERSON}개까지만 선택 가능합니다.`, 'error'); return;
+      
+      // ★ 3개 제한 완벽 복구 (기존 신청 개수 + 현재 선택 개수)
+      const bookedCount = currentUserData?.slots?.length || 0;
+      if (selectedSlots.size + bookedCount >= MAX_PER_PERSON) {
+        showToast(`최대 ${MAX_PER_PERSON}개까지만 신청 가능합니다. (이미 ${bookedCount}개 신청됨)`, 'error'); 
+        return;
       }
+      
       selectedSlots.add(id);
     }
     updateSlotUI(deskIdx, timeIdx);
@@ -254,6 +259,13 @@
   async function handleSubmit() {
     if (!currentUser || !currentUserData) { showToast('로그인이 필요합니다.', 'error'); return; }
     if (selectedSlots.size === 0) { showToast('신청할 상담 슬롯을 1개 이상 선택해 주세요.', 'error'); return; }
+
+    // ★ 3개 제한 제출단 방어 로직 (이중 보안)
+    const bookedCount = currentUserData?.slots?.length || 0;
+    if (selectedSlots.size + bookedCount > MAX_PER_PERSON) {
+       showToast(`신청 횟수를 초과했습니다. (최대 ${MAX_PER_PERSON}개)`, 'error');
+       return;
+    }
 
     const btn = document.getElementById('submit-btn');
     btn.disabled = true; btn.textContent = '실시간 정원 확인 중...';

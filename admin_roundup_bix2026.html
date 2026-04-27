@@ -28,6 +28,7 @@
   const db = getFirestore(app);
   let allData = [];
   let selectedTimeIdx = 0; 
+  let selectedDeskIdx = 0; // 기업별 보기 탭 상태
 
   window.addEventListener('DOMContentLoaded', () => {
     const pw = prompt("관리자 비밀번호를 입력하세요");
@@ -36,6 +37,7 @@
       return;
     }
 
+    // 시간대 탭 세팅
     const timeTabsEl = document.getElementById('time-tabs');
     TIME_SLOTS.forEach((t, i) => {
       const btn = document.createElement('button');
@@ -43,6 +45,16 @@
       btn.textContent = t;
       btn.onclick = () => selectTime(i);
       timeTabsEl.appendChild(btn);
+    });
+
+    // 기업 탭 세팅 (신규)
+    const deskTabsEl = document.getElementById('desk-tabs');
+    DESK_NAMES.forEach((d, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'desk-tab-btn' + (i === 0 ? ' active' : '');
+      btn.textContent = d;
+      btn.onclick = () => selectDesk(i);
+      deskTabsEl.appendChild(btn);
     });
 
     document.getElementById('load-btn').addEventListener('click', loadData);
@@ -71,7 +83,7 @@
       }
       updateStats();
       renderTimeView(selectedTimeIdx);
-      renderDeskView();
+      renderDeskView(selectedDeskIdx);
       renderTable();
     } catch (e) {
       alert('로드 실패: ' + e.message);
@@ -91,7 +103,7 @@
   };
 
   // ══════════════════════════════════════
-  // ★ 1. 시간대별 뷰 
+  // ★ 1. 시간대별 보기 (블루 테마 유지)
   // ══════════════════════════════════════
   function selectTime(idx) {
     selectedTimeIdx = idx;
@@ -107,11 +119,11 @@
     const totalWait = timeData.filter(r => r.status.includes('예비')).length;
 
     let html = `
-      <div class="time-summary-bar">
-        <span class="time-summary-label">🕐 ${timeLabel}</span>
-        <span class="time-summary-stat">확정 <strong>${totalReg}</strong>명 &nbsp;/&nbsp; 예비 <strong>${totalWait}</strong>명 &nbsp;/&nbsp; 총 <strong>${totalReg + totalWait}</strong>명</span>
+      <div class="summary-bar time-theme">
+        <span class="summary-label">🕐 ${timeLabel}</span>
+        <span class="summary-stat">확정 <strong>${totalReg}</strong>명 &nbsp;/&nbsp; 예비 <strong>${totalWait}</strong>명 &nbsp;/&nbsp; 총 <strong>${totalReg + totalWait}</strong>명</span>
       </div>
-      <div class="time-desk-grid">`;
+      <div class="card-grid">`;
 
     for (let d = 0; d < 6; d++) {
       const slotId = `desk${d+1}_time${timeIdx+1}`;
@@ -123,7 +135,7 @@
       html += `
         <div class="desk-card ${isFull ? 'desk-full' : ''}">
           <div class="desk-card-header">
-            <span class="desk-card-name">${DESK_NAMES[d]}</span>
+            <span class="desk-card-name time-theme-text">${DESK_NAMES[d]}</span>
             <span class="desk-card-count">${regs.length}/3 확정 · 예비${waits.length}</span>
           </div>
           <div class="person-section-label confirmed-label">📋 상담 확정</div>`;
@@ -189,102 +201,104 @@
   }
 
   // ══════════════════════════════════════
-  // ★ 2. 기업별 뷰 (시간대 뷰와 동일한 구조로 완전 개편)
+  // ★ 2. 기업별 보기 (그린/에메랄드 테마 + 탭 UI)
   // ══════════════════════════════════════
-  function renderDeskView() {
-    const container = document.getElementById('desk-view-content');
-    let html = '';
+  function selectDesk(idx) {
+    selectedDeskIdx = idx;
+    document.querySelectorAll('.desk-tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+    renderDeskView(idx);
+  }
 
-    for (let d = 0; d < 6; d++) {
-      const boothItems = allData.filter(r => r.deskIdx === d);
-      const totalReg  = boothItems.filter(r => r.status === '상담 확정').length;
-      const totalWait = boothItems.filter(r => r.status.includes('예비')).length;
+  function renderDeskView(deskIdx) {
+    const container = document.getElementById('desk-view-content');
+    const deskLabel = DESK_NAMES[deskIdx];
+    const deskData = allData.filter(r => r.deskIdx === deskIdx);
+    const totalReg  = deskData.filter(r => r.status === '상담 확정').length;
+    const totalWait = deskData.filter(r => r.status.includes('예비')).length;
+
+    let html = `
+      <div class="summary-bar desk-theme">
+        <span class="summary-label">🏢 ${deskLabel}</span>
+        <span class="summary-stat">확정 <strong>${totalReg}</strong>명 &nbsp;/&nbsp; 예비 <strong>${totalWait}</strong>명 &nbsp;/&nbsp; 총 <strong>${totalReg + totalWait}</strong>명</span>
+      </div>
+      <div class="card-grid">`;
+
+    for (let t = 0; t < 6; t++) {
+      const slotId = `desk${deskIdx+1}_time${t+1}`;
+      const items = allData.filter(r => r.slotId === slotId);
+      const regs  = items.filter(r => r.status === '상담 확정');
+      const waits = items.filter(r => r.status.includes('예비'));
+      const isFull = regs.length >= 3;
 
       html += `
-        <div style="margin-bottom: 40px;">
-          <div class="time-summary-bar" style="background: var(--surface); border: 1px solid var(--border); color: var(--text);">
-            <span class="time-summary-label" style="color: var(--accent); font-size: 20px;">🏢 ${DESK_NAMES[d]}</span>
-            <span class="time-summary-stat" style="color: var(--text-light);">확정 <strong style="color:var(--text);">${totalReg}</strong>명 &nbsp;/&nbsp; 예비 <strong style="color:var(--text);">${totalWait}</strong>명</span>
+        <div class="desk-card ${isFull ? 'desk-full' : ''}">
+          <div class="desk-card-header">
+            <span class="desk-card-name desk-theme-text">🕐 ${TIME_SLOTS[t]}</span>
+            <span class="desk-card-count">${regs.length}/3 확정 · 예비${waits.length}</span>
           </div>
-          <div class="time-desk-grid">`;
+          <div class="person-section-label confirmed-label">📋 상담 확정</div>`;
 
-      for (let t = 0; t < 6; t++) {
-        const slotId = `desk${d+1}_time${t+1}`;
-        const items = allData.filter(r => r.slotId === slotId);
-        const regs  = items.filter(r => r.status === '상담 확정');
-        const waits = items.filter(r => r.status.includes('예비'));
-        const isFull = regs.length >= 3;
-
-        html += `
-          <div class="desk-card ${isFull ? 'desk-full' : ''}">
-            <div class="desk-card-header">
-              <span class="desk-card-name" style="font-size: 16px; color: var(--text);">${TIME_SLOTS[t]}</span>
-              <span class="desk-card-count">${regs.length}/3 확정 · 예비${waits.length}</span>
-            </div>
-            <div class="person-section-label confirmed-label">📋 상담 확정</div>`;
-
-        for (let i = 0; i < 3; i++) {
-          const r = regs[i];
-          if (r) {
-            html += `
-              <div class="person-row confirmed" title="${r.univ || r.actualUniv || ''} ${r.studentId || ''}">
-                <div class="person-info">
-                  <span class="person-num">${i+1}</span>
-                  <div>
-                    <div class="person-name">${r.name}</div>
-                    <div class="person-detail">${r.univ || r.actualUniv || '-'} · ${r.studentId || '-'}</div>
-                  </div>
+      for (let i = 0; i < 3; i++) {
+        const r = regs[i];
+        if (r) {
+          html += `
+            <div class="person-row confirmed" title="${r.univ || r.actualUniv || ''} ${r.studentId || ''}">
+              <div class="person-info">
+                <span class="person-num">${i+1}</span>
+                <div>
+                  <div class="person-name">${r.name}</div>
+                  <div class="person-detail">${r.univ || r.actualUniv || '-'} · ${r.studentId || '-'}</div>
                 </div>
-                <div class="person-actions">
-                  <button class="action-btn btn-demote" title="예비로 변경" onclick="handleActionDirect('demote','${slotId}','${r.uid}')">↓</button>
-                  <button class="action-btn btn-delete" title="삭제" onclick="handleActionDirect('delete','${slotId}','${r.uid}')">✕</button>
-                </div>
-              </div>`;
-          } else {
-            html += `<div class="person-row empty-slot"><span class="empty-text">빈 자리</span></div>`;
-          }
+              </div>
+              <div class="person-actions">
+                <button class="action-btn btn-demote" title="예비로 변경" onclick="handleActionDirect('demote','${slotId}','${r.uid}')">↓</button>
+                <button class="action-btn btn-delete" title="삭제" onclick="handleActionDirect('delete','${slotId}','${r.uid}')">✕</button>
+              </div>
+            </div>`;
+        } else {
+          html += `<div class="person-row empty-slot"><span class="empty-text">빈 자리</span></div>`;
         }
-
-        html += `<div class="person-section-label waitlist-label">⏳ 예비 대기</div>`;
-
-        for (let i = 0; i < 3; i++) {
-          const w = waits[i];
-          if (w) {
-            html += `
-              <div class="person-row waitlist" title="${w.univ || w.actualUniv || ''} ${w.studentId || ''}">
-                <div class="person-info">
-                  <span class="person-num wait-num">예비${w.waitNum}</span>
-                  <div>
-                    <div class="person-name">${w.name}</div>
-                    <div class="person-detail">${w.univ || w.actualUniv || '-'} · ${w.studentId || '-'}</div>
-                  </div>
-                </div>
-                <div class="person-actions">
-                  ${regs.length < 3 ? `<button class="action-btn btn-promote" title="확정으로 승격" onclick="handleActionDirect('promote','${slotId}','${w.uid}')">↑</button>` : ''}
-                  <button class="action-btn btn-delete" title="삭제" onclick="handleActionDirect('delete','${slotId}','${w.uid}')">✕</button>
-                </div>
-              </div>`;
-          } else {
-            html += `<div class="person-row empty-wait"><span class="empty-text">-</span></div>`;
-          }
-        }
-
-        const withQ = [...regs, ...waits].filter(r => r.preQuestion && r.preQuestion.trim());
-        if (withQ.length > 0) {
-          html += `<div class="preq-section">`;
-          withQ.forEach(r => {
-            html += `<div class="preq-row"><span class="preq-name">${r.name}:</span> <span class="preq-text">${r.preQuestion}</span></div>`;
-          });
-          html += `</div>`;
-        }
-        html += `</div>`; 
       }
-      html += `</div></div>`; 
+
+      html += `<div class="person-section-label waitlist-label">⏳ 예비 대기</div>`;
+
+      for (let i = 0; i < 3; i++) {
+        const w = waits[i];
+        if (w) {
+          html += `
+            <div class="person-row waitlist" title="${w.univ || w.actualUniv || ''} ${w.studentId || ''}">
+              <div class="person-info">
+                <span class="person-num wait-num">예비${w.waitNum}</span>
+                <div>
+                  <div class="person-name">${w.name}</div>
+                  <div class="person-detail">${w.univ || w.actualUniv || '-'} · ${w.studentId || '-'}</div>
+                </div>
+              </div>
+              <div class="person-actions">
+                ${regs.length < 3 ? `<button class="action-btn btn-promote" title="확정으로 승격" onclick="handleActionDirect('promote','${slotId}','${w.uid}')">↑</button>` : ''}
+                <button class="action-btn btn-delete" title="삭제" onclick="handleActionDirect('delete','${slotId}','${w.uid}')">✕</button>
+              </div>
+            </div>`;
+        } else {
+          html += `<div class="person-row empty-wait"><span class="empty-text">-</span></div>`;
+        }
+      }
+
+      const withQ = [...regs, ...waits].filter(r => r.preQuestion && r.preQuestion.trim());
+      if (withQ.length > 0) {
+        html += `<div class="preq-section">`;
+        withQ.forEach(r => {
+          html += `<div class="preq-row"><span class="preq-name">${r.name}:</span> <span class="preq-text">${r.preQuestion}</span></div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`; 
     }
+    html += `</div>`; 
     container.innerHTML = html;
   }
 
-  // ── ★ 오류 수정된 액션 처리 (undefined 완벽 방어) ──
+  // ── ★ 오류 완벽 수정본: 트랜잭션 데이터 처리 ──
   window.handleActionDirect = async (action, slotId, uid) => {
     await handleAction({ value: action }, slotId, uid);
   };
@@ -310,13 +324,13 @@
         const student = regs.find(r => r.uid === uid) || waits.find(r => r.uid === uid);
         if (!student) throw new Error("학생 정보를 찾을 수 없습니다.");
 
-        // 원본 객체 복제 및 불필요한 속성 제거
+        // 원본 훼손을 막고 undefined 에러를 방지하는 얕은 복사
         const studentObj = { ...student };
 
         if (action === 'promote') {
           if (regs.length >= 3) throw new Error("CANCEL");
           waits = waits.filter(r => r.uid !== uid);
-          // 핵심: undefined 할당 대신 delete 사용으로 Firestore 에러 방지
+          // ★ Firebase 에러 원인(undefined)을 근본적으로 제거하는 방법 ★
           delete studentObj.waitNum; 
           regs.push(studentObj);
         } else if (action === 'demote') {
@@ -327,7 +341,7 @@
           waits = waits.filter(r => r.uid !== uid);
         }
 
-        // 예비번호 재정렬 (순서대로 1번부터)
+        // 예비번호 재정렬
         waits = waits.map((item, idx) => {
           item.waitNum = idx + 1;
           return item;
@@ -336,7 +350,6 @@
         t.update(slotRef, { registrations: regs, waitlist: waits });
       });
 
-      // 마이페이지 목록 연동 삭제
       if (action === 'delete') {
         const aSnap = await getDoc(appRef);
         if (aSnap.exists()) {
@@ -349,14 +362,13 @@
     }
   };
 
-  // ── 통계 ──
+  // ── 통계 및 테이블 (기존 동일) ──
   function updateStats() {
     document.getElementById('stat-total').textContent    = allData.length;
     document.getElementById('stat-regular').textContent  = allData.filter(r => r.status === '상담 확정').length;
     document.getElementById('stat-waitlist').textContent = allData.filter(r => r.status.includes('예비')).length;
   }
 
-  // ── 전체 명단 테이블 ──
   function renderTable() {
     const q = document.getElementById('search-input').value.toLowerCase();
     const filtered = allData.filter(r => !q || (r.name||'').toLowerCase().includes(q) || (r.studentId||'').toLowerCase().includes(q) || (r.univ||'').toLowerCase().includes(q));
@@ -400,7 +412,13 @@
     --bg: #f0f2f5;
     --surface: #ffffff;
     --border: #d1d5db;
-    --accent: #2a5c9e;
+    
+    /* 시간대 뷰 (블루) */
+    --accent: #2a5c9e; 
+    
+    /* 기업 뷰 (에메랄드) */
+    --desk-accent: #059669; 
+    
     --green: #10B981;
     --yellow: #D97706;
     --red: #EF4444;
@@ -424,29 +442,47 @@
   .admin-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
   .tab-btn { padding: 12px 22px; border: none; background: none; font-size: 15px; font-weight: 700; color: var(--text-light); cursor: pointer; border-radius: 8px 8px 0 0; font-family: inherit; }
   .tab-btn.active { background: var(--surface); color: var(--accent); border-bottom: 3px solid var(--accent); margin-bottom: -2px; }
+  
+  /* 기업 탭이 활성화될 때 선 색상 변경 */
+  .tab-btn[data-tab="desk"].active { color: var(--desk-accent); border-bottom-color: var(--desk-accent); }
 
   /* ════════════════════════════════
-     ★ 시간대별 및 기업별 카드형 뷰 (통합)
+     ★ 시간대별 & 기업별 카드형 뷰 공통 스타일
   ════════════════════════════════ */
-  .time-tabs-wrap { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tabs-wrap { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  
+  /* 시간 탭 버튼 (블루) */
   .time-tab-btn { padding: 10px 18px; border: 2px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 14px; font-weight: 700; color: var(--text-light); cursor: pointer; font-family: inherit; transition: all 0.2s; }
   .time-tab-btn:hover { border-color: var(--accent); color: var(--accent); }
   .time-tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  
+  /* 기업 탭 버튼 (그린) */
+  .desk-tab-btn { padding: 10px 18px; border: 2px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 14px; font-weight: 700; color: var(--text-light); cursor: pointer; font-family: inherit; transition: all 0.2s; }
+  .desk-tab-btn:hover { border-color: var(--desk-accent); color: var(--desk-accent); }
+  .desk-tab-btn.active { background: var(--desk-accent); color: #fff; border-color: var(--desk-accent); }
 
-  .time-summary-bar { display: flex; align-items: center; justify-content: space-between; background: var(--accent); color: #fff; border-radius: 10px; padding: 14px 20px; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
-  .time-summary-label { font-size: 18px; font-weight: 900; letter-spacing: 0.5px; }
-  .time-summary-stat { font-size: 14px; opacity: 0.9; }
-  .time-summary-stat strong { font-size: 18px; }
+  /* 요약 바 색상 구분 */
+  .summary-bar { display: flex; align-items: center; justify-content: space-between; color: #fff; border-radius: 10px; padding: 14px 20px; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+  .time-theme { background: var(--accent); }
+  .desk-theme { background: var(--desk-accent); }
+  
+  .summary-label { font-size: 18px; font-weight: 900; letter-spacing: 0.5px; }
+  .summary-stat { font-size: 14px; opacity: 0.9; }
+  .summary-stat strong { font-size: 18px; }
 
-  /* 기업 카드 6개 그리드 */
-  .time-desk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-  @media (max-width: 1100px) { .time-desk-grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 700px)  { .time-desk-grid { grid-template-columns: 1fr; } }
+  /* 텍스트 색상 구분 */
+  .time-theme-text { color: var(--accent); }
+  .desk-theme-text { color: var(--desk-accent); }
+
+  /* 카드 그리드 */
+  .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 1100px) { .card-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 700px)  { .card-grid { grid-template-columns: 1fr; } }
 
   .desk-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
   .desk-card.desk-full { border-color: #10B981; border-width: 2px; }
   .desk-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  .desk-card-name { font-size: 17px; font-weight: 900; color: var(--accent); }
+  .desk-card-name { font-size: 17px; font-weight: 900; }
   .desk-card-count { font-size: 12px; color: var(--text-light); font-weight: 600; }
 
   .person-section-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 4px; display: inline-block; margin: 8px 0 6px; }
@@ -475,7 +511,6 @@
   .btn-delete  { background: #FEE2E2; color: var(--red); }
   .btn-delete:hover  { background: var(--red); color: #fff; }
 
-  /* 사전 질문 미리보기 */
   .preq-section { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
   .preq-row { font-size: 11px; color: var(--text-light); margin-bottom: 4px; line-height: 1.5; }
   .preq-name { font-weight: 700; color: var(--text); }
@@ -523,11 +558,12 @@
   </div>
 
   <div id="time-view">
-    <div class="time-tabs-wrap" id="time-tabs"></div>
+    <div class="tabs-wrap" id="time-tabs"></div>
     <div id="time-view-content"></div>
   </div>
 
   <div id="desk-view" style="display:none;">
+    <div class="tabs-wrap" id="desk-tabs"></div>
     <div id="desk-view-content"></div>
   </div>
 
