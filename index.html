@@ -48,29 +48,24 @@
 
   function slotId(d, t) { return `desk${d+1}_time${t+1}`; }
 
-  // ★ 2/3 마감 버그 수정 및 강력 방어 로직 ★
+  // ★ 수정된 슬롯 상태 판별 로직 (새치기 방지 + 예비 3명 빈틈없이 채우기) ★
   function getSlotStatus(data) {
     const regArray = data?.registrations || [];
     const waitArray = data?.waitlist || [];
     const reg = Array.isArray(regArray) ? regArray.length : 0;
     const wait = Array.isArray(waitArray) ? waitArray.length : 0;
     
-    // 예비자가 1명이라도 존재한다면, 누군가 취소해서 정규가 비었더라도 시스템상 마감 처리
-    if (wait > 0) {
-      if (reg < MAX_REGULAR) {
-        return { type: 'closed', label: '마감', sub: '관리자 확인중' }; 
-      }
-      if (wait < MAX_WAITLIST) {
-        return { type: 'waitlist', label: `예비${wait + 1}`, sub: '대기신청' };
-      }
+    // 정규 자리가 남아있고 대기자도 없을 때만 즉시 확정 가능
+    if (reg < MAX_REGULAR && wait === 0) {
+      return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
+    } 
+    // 정규가 찼거나 대기자가 있어서 뒤로 줄을 서야 하는 경우 (최대 3명까지)
+    else if (wait < MAX_WAITLIST) {
+      return { type: 'waitlist', label: `예비${wait + 1}`, sub: '대기신청' };
+    } 
+    // 예비 3명까지 모두 꽉 찬 경우
+    else {
       return { type: 'closed', label: '마감', sub: '현장문의' };
-    } else {
-      // 예비자가 아예 없는 상태
-      if (reg < MAX_REGULAR) {
-        return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
-      }
-      // 정규 3명이 꽉 찼지만 예비는 없는 상태
-      return { type: 'waitlist', label: '예비1', sub: '대기신청' };
     }
   }
 
@@ -102,39 +97,29 @@
     buildTable();
     subscribeSlots();
     updateSelectedSummary();
-    
-    // 기본으로 부스 신청 탭 열기
     switchNav('apply'); 
 
-    // ★ 관리자 알림 감시 및 전용 모달창 호출 로직 ★
+    // 관리자 알림 감시 로직
     onSnapshot(doc(db, "applicants", currentUser.uid), (snap) => {
       if (snap.exists()) {
         const data = snap.data();
         if (data.adminNotification) {
-          // 커스텀 모달창 띄우기
           showNotificationModal(data.adminNotification);
-          
-          // 알림을 확인했으므로 DB에서 메시지 지우기 (반복 팝업 방지)
-          updateDoc(doc(db, "applicants", currentUser.uid), {
-            adminNotification: ""
-          });
+          updateDoc(doc(db, "applicants", currentUser.uid), { adminNotification: "" });
         }
       }
     });
   }
 
-  // ★ 알림 모달창 제어 함수 추가 ★
   window.showNotificationModal = (msg) => {
     document.getElementById('noti-message').innerText = msg;
     document.getElementById('noti-modal').style.display = 'flex';
   };
   window.closeNotificationModal = () => {
     document.getElementById('noti-modal').style.display = 'none';
-    // 모달창 닫은 후 최신 내역을 보여주기 위해 마이페이지로 이동
     switchNav('mypage');
   };
 
-  // ★ 네비게이션(유저바) 전환 로직 ★
   window.switchNav = (tab) => {
     document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
     document.querySelector(`[onclick="switchNav('${tab}')"]`).classList.add('active');
@@ -146,9 +131,7 @@
     if (tab === 'mypage') renderMyPage();
   };
 
-  // 로그인/회원가입
   async function handleRegister() {
-    // (기존 회원가입 로직 유지)
     const email = document.getElementById('reg-email').value.trim();
     const pw = document.getElementById('reg-pw').value.trim();
     const pwCheck = document.getElementById('reg-pw-check').value.trim();
@@ -202,7 +185,7 @@
         const id = slotId(d, t);
         onSnapshot(doc(db, "slots", id), (snap) => {
           slotsCache[id] = snap.exists() ? snap.data() : { registrations: [], waitlist: [] };
-          updateSlotUI(d, t); // 데이터가 바뀌면 즉시 UI 갱신
+          updateSlotUI(d, t);
         });
       }
     }
@@ -268,7 +251,6 @@
   };
   window._updateQ = (id, val) => { preQuestions[id] = val; };
 
-  // ★ 강화된 실시간 선착순 검증형 신청 로직 ★
   async function handleSubmit() {
     if (!currentUser || !currentUserData) { showToast('로그인이 필요합니다.', 'error'); return; }
     if (selectedSlots.size === 0) { showToast('신청할 상담 슬롯을 1개 이상 선택해 주세요.', 'error'); return; }
@@ -285,14 +267,12 @@
         const slotRef = doc(db, "slots", id);
         let resultType = '';
 
-        // 트랜잭션을 통해 서버의 최신 데이터를 한 번 더 읽어와서 검증
         await runTransaction(db, async (transaction) => {
           const slotSnap = await transaction.get(slotRef);
           const slotData = slotSnap.exists() ? slotSnap.data() : { registrations: [], waitlist: [] };
           const reg  = slotData.registrations || [];
           const wait = slotData.waitlist || [];
 
-          // 1. 이미 신청한 슬롯인지 체크
           if ([...reg, ...wait].some(r => r.uid === currentUser.uid)) {
             resultType = 'duplicate';
             return;
@@ -301,20 +281,16 @@
           const q = preQuestions[id] || '';
           const newEntry = { ...applicantInfo, slot: id, preQuestion: q };
 
-          // 2. 실시간 T/O 체크 (핵심: 예비자가 있다면 정규 자리가 있어도 예비로 보냄)
           if (wait.length === 0 && reg.length < MAX_REGULAR) {
-            // 정규 등록 가능 상태
             const newRegs = [...reg, newEntry];
             transaction.update(slotRef, { registrations: newRegs });
             resultType = 'regular';
           } else if (wait.length < MAX_WAITLIST) {
-            // 예비 등록 가능 상태
             const waitNum = wait.length + 1;
             const newWaitlist = [...wait, { ...newEntry, waitNum }];
             transaction.update(slotRef, { waitlist: newWaitlist });
             resultType = `waitlist_${waitNum}`;
           } else {
-            // 버튼 클릭 후 찰나의 순간에 서버에서 마감된 경우
             resultType = 'closed';
           }
         });
@@ -323,7 +299,6 @@
         results.push({ id, deskName: DESK_NAMES[d-1], time: TIME_SLOTS[t-1], type: resultType });
       }
 
-      // 성공한 내역만 유저 프로필에 업데이트
       const successIds = results.filter(r => r.type !== 'duplicate' && r.type !== 'closed').map(r => r.id);
       if (successIds.length > 0) {
         await updateDoc(doc(db, "applicants", currentUser.uid), {
@@ -350,7 +325,7 @@
       let badge = '';
       if (r.type === 'regular') badge = '<span class="badge badge-blue">정규 확정</span>';
       else if (r.type.startsWith('waitlist')) badge = `<span class="badge badge-orange">예비 ${r.type.split('_')[1]}번</span>`;
-      else if (r.type === 'closed') badge = '<span class="badge badge-gray">마감</span>';
+      else if (r.type === 'closed') badge = '<span class="badge badge-gray">마감 (잔여석 없음)</span>';
       else if (r.type === 'duplicate') badge = '<span class="badge badge-gray">중복 신청</span>';
       html += `<div class="result-row">${badge}<span class="result-time">${r.deskName} · ${r.time}</span></div>`;
     });
@@ -395,7 +370,6 @@
       const status  = myReg ? 'regular' : (myWait ? `waitlist_${myWait.waitNum}` : 'unknown');
       const currentQ = (myReg || myWait)?.preQuestion || '';
 
-      // ★ 마이페이지 배지 디자인 변경 ★
       let statusBadge = '';
       if (status === 'regular') {
         statusBadge = '<span style="display:inline-block; background:#E1F0E8; color:#10B981; font-size:13px; font-weight:900; padding:5px 14px; border-radius:30px; border:none; letter-spacing:0.5px;">상담 확정</span>';
@@ -532,7 +506,6 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text-main); font-family: 'Noto Sans KR', sans-serif; font-size: 15px; line-height: 1.5; min-height: 100vh; -webkit-font-smoothing: antialiased; }
 
-  /* ── 히어로 ── */
   .hero { background: var(--surface); border-bottom: 1px solid var(--border); padding: 40px 20px 32px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.02); }
   .hero-logo { height: 48px; margin-bottom: 24px; object-fit: contain; display: block; margin-left: auto; margin-right: auto; }
   .hero-badge { display: inline-block; background: var(--kbio-blue-light); color: var(--kbio-blue); font-size: 13px; font-weight: 700; padding: 6px 16px; border-radius: 20px; margin-bottom: 12px; }
@@ -540,7 +513,6 @@
   .hero-info { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; max-width: 700px; margin: 0 auto; }
   .hero-info span { background: var(--surface2); border: 1px solid var(--border); padding: 6px 14px; border-radius: 6px; color: var(--text-sub); font-size: 13px; font-weight: 600; }
 
-  /* ── 인증 화면 ── */
   #auth-screen { display: none; justify-content: center; align-items: flex-start; padding: 40px 16px 80px; }
   .auth-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 36px 32px; width: 100%; max-width: 480px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
   .auth-tabs { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 28px; }
@@ -562,10 +534,8 @@
   .auth-submit:disabled { background: var(--text-light); cursor: not-allowed; }
   .auth-divider { text-align: center; margin: 16px 0; font-size: 13px; color: var(--text-light); }
 
-  /* ── 통합 메인 컨테이너 (유저바 포함) ── */
   #main-app-container { display: none; }
   
-  /* 유저 네비게이션 바 (가운데 탭 분리, 우측 프로필) */
   .user-nav-bar { background: var(--kbio-blue-dark); color: #fff; padding: 0 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 100; }
   .user-nav-inner { max-width: 1000px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; height: 56px; }
   .user-nav-links { display: flex; gap: 4px; height: 100%; }
@@ -587,7 +557,6 @@
 
   .notice-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 32px; font-size: 15px; color: var(--text-sub); line-height: 1.8; text-align: center; }
 
-  /* 테이블 */
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 24px; }
   .slot-table { width: 100%; border-collapse: collapse; min-width: 680px; background: var(--surface); }
   .slot-table th { background: #F3F4F6; color: var(--text-main); font-size: 13px; font-weight: 700; padding: 14px 8px; text-align: center; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
@@ -622,7 +591,6 @@
   #submit-btn:hover { background: var(--kbio-blue-dark); transform: translateY(-2px); }
   #submit-btn:disabled { background: var(--text-light); cursor: not-allowed; transform: none; box-shadow: none; }
 
-  /* 마이페이지 내역 */
   .mypage-title { font-size: 22px; font-weight: 900; color: var(--text-main); margin-bottom: 24px; }
   .mypage-info-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; margin-bottom: 20px; }
   .mypage-info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
