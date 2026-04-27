@@ -17,7 +17,7 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc, updateDoc, runTransaction, arrayUnion, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, updateDoc, runTransaction, arrayUnion, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   const firebaseConfig = {
@@ -48,25 +48,28 @@
 
   function slotId(d, t) { return `desk${d+1}_time${t+1}`; }
 
+  // ★ 2/3 마감 버그 수정 및 강력 방어 로직 ★
   function getSlotStatus(data) {
-    const reg = data?.registrations?.length || 0;
-    const wait = data?.waitlist?.length || 0;
+    const regArray = data?.registrations || [];
+    const waitArray = data?.waitlist || [];
+    const reg = Array.isArray(regArray) ? regArray.length : 0;
+    const wait = Array.isArray(waitArray) ? waitArray.length : 0;
     
-    // 핵심 로직: 예비자가 한 명이라도 있으면, 정규 자리가 비어도 '마감(예비 대기중)'으로 표시
+    // 예비자가 1명이라도 존재한다면, 누군가 취소해서 정규가 비었더라도 시스템상 마감 처리
     if (wait > 0) {
       if (reg < MAX_REGULAR) {
-        return { type: 'closed', label: '마감', sub: '예비 대기중' }; 
+        return { type: 'closed', label: '마감', sub: '관리자 확인중' }; 
       }
       if (wait < MAX_WAITLIST) {
         return { type: 'waitlist', label: `예비${wait + 1}`, sub: '대기신청' };
       }
-      return { type: 'closed', label: '마감', sub: '현장접수' };
+      return { type: 'closed', label: '마감', sub: '현장문의' };
     } else {
-      // 예비자가 없는 평시 상태
+      // 예비자가 아예 없는 상태
       if (reg < MAX_REGULAR) {
         return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
       }
-      // 정규가 3명 꽉 찼고 예비자가 아직 없을 때
+      // 정규 3명이 꽉 찼지만 예비는 없는 상태
       return { type: 'waitlist', label: '예비1', sub: '대기신청' };
     }
   }
@@ -86,59 +89,54 @@
 
   function showAuthScreen() {
     document.getElementById('auth-screen').style.display = 'flex';
-    document.getElementById('main-app').style.display = 'none';
-    document.getElementById('mypage-screen').style.display = 'none';
-    document.getElementById('user-bar').style.display = 'none';
+    document.getElementById('main-app-container').style.display = 'none';
   }
 
   function showMainApp() {
     document.getElementById('auth-screen').style.display = 'none';
-    document.getElementById('main-app').style.display = 'block';
-    document.getElementById('mypage-screen').style.display = 'none';
-    document.getElementById('user-bar').style.display = 'flex';
+    document.getElementById('main-app-container').style.display = 'block';
 
     const name = currentUserData?.name || currentUser.email;
-    document.getElementById('user-name-display').textContent = `${name}님`;
+    document.getElementById('user-name-display').textContent = name;
 
     buildTable();
     subscribeSlots();
     updateSelectedSummary();
+    
+    // 기본으로 부스 신청 탭 열기
+    switchNav('apply'); 
   }
 
-  function showMyPage() {
-    document.getElementById('auth-screen').style.display = 'none';
-    document.getElementById('main-app').style.display = 'none';
-    document.getElementById('mypage-screen').style.display = 'block';
-    renderMyPage();
-  }
+  // ★ 네비게이션(유저바) 전환 로직 ★
+  window.switchNav = (tab) => {
+    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelector(`[onclick="switchNav('${tab}')"]`).classList.add('active');
 
-  // 회원가입
+    document.getElementById('view-notice').style.display = tab === 'notice' ? 'block' : 'none';
+    document.getElementById('view-apply').style.display = tab === 'apply' ? 'block' : 'none';
+    document.getElementById('view-mypage').style.display = tab === 'mypage' ? 'block' : 'none';
+
+    if (tab === 'mypage') renderMyPage();
+  };
+
+  // 로그인/회원가입
   async function handleRegister() {
-    const email      = document.getElementById('reg-email').value.trim();
-    const pw         = document.getElementById('reg-pw').value.trim();
-    const pwCheck    = document.getElementById('reg-pw-check').value.trim();
+    // (기존 회원가입 로직 유지)
+    const email = document.getElementById('reg-email').value.trim();
+    const pw = document.getElementById('reg-pw').value.trim();
+    const pwCheck = document.getElementById('reg-pw-check').value.trim();
     const univSelect = document.getElementById('reg-univ').value;
     const actualUniv = (univSelect === '기타') ? document.getElementById('reg-univ-direct').value.trim() : univSelect;
-    const studentId  = document.getElementById('reg-studentid').value.trim();
-    const name       = document.getElementById('reg-name').value.trim();
-    const phone      = document.getElementById('reg-phone').value.trim();
-    const agree      = document.getElementById('reg-agree').checked;
+    const studentId = document.getElementById('reg-studentid').value.trim();
+    const name = document.getElementById('reg-name').value.trim();
+    const phone = document.getElementById('reg-phone').value.trim();
+    const agree = document.getElementById('reg-agree').checked;
 
-    if (!email || !pw || !actualUniv || !studentId || !name || !phone) {
-      showToast('모든 항목을 입력해 주세요.', 'error'); return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      showToast('올바른 이메일 형식을 입력해 주세요.', 'error'); return;
-    }
-    if (!/^\d{6}$/.test(pw)) {
-      showToast('비밀번호는 숫자 6자리로 입력해 주세요.', 'error'); return;
-    }
-    if (pw !== pwCheck) {
-      showToast('비밀번호가 일치하지 않습니다.', 'error'); return;
-    }
-    if (!agree) {
-      showToast('개인정보 수집 및 이용에 동의해 주세요.', 'error'); return;
-    }
+    if (!email || !pw || !actualUniv || !studentId || !name || !phone) { showToast('모든 항목을 입력해 주세요.', 'error'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showToast('올바른 이메일 형식을 입력해 주세요.', 'error'); return; }
+    if (!/^\d{6}$/.test(pw)) { showToast('비밀번호는 숫자 6자리로 입력해 주세요.', 'error'); return; }
+    if (pw !== pwCheck) { showToast('비밀번호가 일치하지 않습니다.', 'error'); return; }
+    if (!agree) { showToast('개인정보 수집 및 이용에 동의해 주세요.', 'error'); return; }
 
     const btn = document.getElementById('reg-btn');
     btn.disabled = true; btn.textContent = '처리 중...';
@@ -146,54 +144,25 @@
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, pw);
       await setDoc(doc(db, "applicants", cred.user.uid), {
-        uid: cred.user.uid, 
-        email, 
-        univ: actualUniv, // 하나로 통합된 소속 대학
-        studentId, 
-        name, 
-        phone, 
-        slots: [],
-        registeredAt: new Date().toISOString()
+        uid: cred.user.uid, email, univ: actualUniv, studentId, name, phone, slots: [], registeredAt: new Date().toISOString()
       });
       showToast('회원가입 완료! 자동으로 로그인됩니다.', 'success');
     } catch (e) {
-      const msg = {
-        'auth/email-already-in-use': '이미 가입된 이메일입니다. 로그인해 주세요.',
-        'auth/invalid-email': '올바른 이메일 형식이 아닙니다.',
-        'auth/weak-password': '비밀번호가 너무 약합니다.'
-      }[e.code] || '오류가 발생했습니다: ' + e.message;
-      showToast(msg, 'error');
-    } finally {
-      btn.disabled = false; btn.textContent = '회원가입';
-    }
+      showToast('오류: ' + e.message, 'error');
+    } finally { btn.disabled = false; btn.textContent = '회원가입'; }
   }
 
-  // 로그인
   async function handleLogin() {
     const email = document.getElementById('login-email').value.trim();
-    const pw    = document.getElementById('login-pw').value.trim();
-
-    if (!email || !pw) { showToast('이메일과 비밀번호를 입력해 주세요.', 'error'); return; }
-
+    const pw = document.getElementById('login-pw').value.trim();
+    if (!email || !pw) { showToast('정보를 입력해 주세요.', 'error'); return; }
     const btn = document.getElementById('login-btn');
     btn.disabled = true; btn.textContent = '로그인 중...';
-
-    try {
-      await signInWithEmailAndPassword(auth, email, pw);
-    } catch (e) {
-      const msg = {
-        'auth/user-not-found': '가입된 이메일이 아닙니다.',
-        'auth/wrong-password': '비밀번호가 틀렸습니다.',
-        'auth/invalid-credential': '이메일 또는 비밀번호를 확인해 주세요.',
-        'auth/too-many-requests': '로그인 시도가 너무 많습니다. 잠시 후 시도해 주세요.'
-      }[e.code] || '로그인 오류: ' + e.message;
-      showToast(msg, 'error');
-    } finally {
-      btn.disabled = false; btn.textContent = '로그인';
-    }
+    try { await signInWithEmailAndPassword(auth, email, pw); } 
+    catch (e) { showToast('이메일 또는 비밀번호를 확인해 주세요.', 'error'); } 
+    finally { btn.disabled = false; btn.textContent = '로그인'; }
   }
 
-  // 로그아웃
   async function handleLogout() {
     await signOut(auth);
     selectedSlots.clear();
@@ -206,7 +175,7 @@
         const id = slotId(d, t);
         onSnapshot(doc(db, "slots", id), (snap) => {
           slotsCache[id] = snap.exists() ? snap.data() : { registrations: [], waitlist: [] };
-          updateSlotUI(d, t);
+          updateSlotUI(d, t); // 데이터가 바뀌면 즉시 UI 갱신
         });
       }
     }
@@ -228,7 +197,6 @@
   function toggleSlot(deskIdx, timeIdx) {
     const id = slotId(deskIdx, timeIdx);
     if (getSlotStatus(slotsCache[id] || {}).type === 'closed') return;
-
     if (selectedSlots.has(id)) {
       selectedSlots.delete(id);
     } else {
@@ -273,18 +241,15 @@
   };
   window._updateQ = (id, val) => { preQuestions[id] = val; };
 
-  // 신청 제출
   async function handleSubmit() {
-    if (!currentUser || !currentUserData) { showToast('로그인이 필요합니다.', 'error'); return; }
-
-    if (selectedSlots.size === 0) { showToast('신청할 상담 슬롯을 1개 이상 선택해 주세요.', 'error'); return; }
+    if (!currentUser || !currentUserData) return;
+    if (selectedSlots.size === 0) { showToast('신청할 슬롯을 선택해 주세요.', 'error'); return; }
 
     const btn = document.getElementById('submit-btn');
     btn.disabled = true; btn.textContent = '신청 처리 중...';
 
-    // 회원가입 시 저장된 정보 활용 (폼 삭제됨)
     const { univ, actualUniv, studentId, name, phone, email } = currentUserData;
-    const finalUniv = univ || actualUniv || '알 수 없음'; // 하위 호환
+    const finalUniv = univ || actualUniv || '알 수 없음';
 
     try {
       const applicantRef = doc(db, "applicants", currentUser.uid);
@@ -292,9 +257,8 @@
       const existingSlots = applicantSnap.exists() ? (applicantSnap.data().slots || []) : [];
 
       if (existingSlots.length + selectedSlots.size > MAX_PER_PERSON) {
-        const remaining = MAX_PER_PERSON - existingSlots.length;
-        showToast(`이미 ${existingSlots.length}건이 신청되어 있습니다. (잔여 ${remaining}건)`, 'error');
-        btn.disabled = false; btn.textContent = '상담부스 예약 완료하기';
+        showToast(`잔여 신청 횟수를 초과했습니다.`, 'error');
+        btn.disabled = false; btn.textContent = '예약 완료하기';
         return;
       }
 
@@ -311,8 +275,7 @@
           const reg  = slotData.registrations || [];
           const wait = slotData.waitlist || [];
 
-          const already = [...reg, ...wait].some(r => r.uid === currentUser.uid);
-          if (already) { resultType = 'duplicate'; return; }
+          if ([...reg, ...wait].some(r => r.uid === currentUser.uid)) { resultType = 'duplicate'; return; }
 
           const q = preQuestions[id] || '';
           if (reg.length < MAX_REGULAR) {
@@ -340,27 +303,24 @@
 
       showResultModal(results, name);
     } catch (err) {
-      console.error(err);
-      showToast('시스템 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.', 'error');
-    } finally {
-      btn.disabled = false; btn.textContent = '상담부스 예약 완료하기';
-    }
+      showToast('오류 발생: ' + err.message, 'error');
+    } finally { btn.disabled = false; btn.textContent = '예약 완료하기'; }
   }
 
   function showResultModal(results, name) {
     const modal = document.getElementById('result-modal');
     const body  = document.getElementById('result-body');
-    let html = `<div class="result-greeting"><strong>${name}</strong>님의 상담 신청 내역입니다.</div>`;
+    let html = `<div class="result-greeting"><strong>${name}</strong>님의 신청 내역입니다.</div>`;
     results.forEach(r => {
       let badge = '';
-      if (r.type === 'regular')               badge = '<span class="badge badge-blue">정규 신청 확정</span>';
+      if (r.type === 'regular') badge = '<span class="badge badge-blue">정규 확정</span>';
       else if (r.type.startsWith('waitlist')) badge = `<span class="badge badge-orange">예비 ${r.type.split('_')[1]}번</span>`;
-      else if (r.type === 'closed')           badge = '<span class="badge badge-gray">마감 (현장 문의)</span>';
-      else if (r.type === 'duplicate')        badge = '<span class="badge badge-gray">이미 신청된 슬롯</span>';
+      else if (r.type === 'closed') badge = '<span class="badge badge-gray">마감</span>';
+      else if (r.type === 'duplicate') badge = '<span class="badge badge-gray">중복 신청</span>';
       html += `<div class="result-row">${badge}<span class="result-time">${r.deskName} · ${r.time}</span></div>`;
     });
-    html += `<div class="result-notice">※ 예비 신청자는 현장 상황에 따라 순차적으로 개별 안내해 드립니다.</div>
-             <button class="btn-mypage-link" onclick="document.getElementById('result-modal').style.display='none'; showMyPage();">내 신청 내역 확인하기 →</button>`;
+    html += `<div class="result-notice">※ 예비 신청자는 현장 상황에 따라 개별 안내해 드립니다.</div>
+             <button class="btn-mypage-link" onclick="document.getElementById('result-modal').style.display='none'; switchNav('mypage');">내 신청 내역 확인하기 →</button>`;
     body.innerHTML = html;
     modal.style.display = 'flex';
 
@@ -419,7 +379,7 @@
             </div>
           </div>
           <div class="mypage-q-label">사전 질문 (수정 가능)</div>
-          <textarea class="mypage-textarea" id="q_${slotId}" placeholder="멘토님에게 궁금한 점을 미리 작성해 두세요. (선택사항)">${currentQ}</textarea>
+          <textarea class="mypage-textarea" id="q_${slotId}" placeholder="멘토님에게 궁금한 점을 미리 작성해 두세요.">${currentQ}</textarea>
           <button class="save-q-btn" onclick="window._saveQuestion('${slotId}')">질문 저장</button>
         </div>`;
     }));
@@ -437,22 +397,19 @@
       const slotSnap = await getDoc(slotRef);
       if (!slotSnap.exists()) return;
       const data = slotSnap.data();
-
       const updateArray = (arr) => arr.map(r => r.uid === currentUser.uid ? { ...r, preQuestion: newQ } : r);
       await updateDoc(slotRef, { registrations: updateArray(data.registrations || []), waitlist: updateArray(data.waitlist || []) });
-
       btn.textContent = '✓ 저장됨';
       setTimeout(() => { btn.disabled = false; btn.textContent = '질문 저장'; }, 2000);
     } catch (e) {
-      showToast('저장 실패: ' + e.message, 'error');
+      showToast('저장 실패', 'error');
       btn.disabled = false; btn.textContent = '질문 저장';
     }
   };
 
   window._cancelSlot = async (slotId) => {
-    if (!confirm('정말 이 상담 신청을 취소하시겠습니까?')) return;
-
-    const slotRef      = doc(db, "slots", slotId);
+    if (!confirm('정말 이 상담 신청을 취소하시겠습니까?\n※ 취소 즉시 자리가 반환됩니다.')) return;
+    const slotRef = doc(db, "slots", slotId);
     const applicantRef = doc(db, "applicants", currentUser.uid);
 
     try {
@@ -461,7 +418,7 @@
         const data = slotSnap.data();
         await updateDoc(slotRef, {
           registrations: (data.registrations || []).filter(r => r.uid !== currentUser.uid),
-          waitlist:      (data.waitlist      || []).filter(r => r.uid !== currentUser.uid)
+          waitlist: (data.waitlist || []).filter(r => r.uid !== currentUser.uid)
         });
       }
       const appSnap = await getDoc(applicantRef);
@@ -470,7 +427,6 @@
         await updateDoc(applicantRef, { slots });
         currentUserData = { ...appSnap.data(), slots };
       }
-
       showToast('신청이 취소되었습니다.', 'success');
       renderMyPage();
     } catch (e) { showToast('취소 실패: ' + e.message, 'error'); }
@@ -505,12 +461,10 @@
   window.switchTab = (tab) => {
     document.getElementById('tab-login').classList.toggle('active', tab === 'login');
     document.getElementById('tab-register').classList.toggle('active', tab === 'register');
-    document.getElementById('login-form').style.display  = tab === 'login'    ? 'block' : 'none';
+    document.getElementById('login-form').style.display  = tab === 'login' ? 'block' : 'none';
     document.getElementById('register-form').style.display = tab === 'register' ? 'block' : 'none';
   };
 
-  window.showMyPage   = showMyPage;
-  window.showMainApp  = showMainApp;
   window.handleLogout = handleLogout;
 
   window.addEventListener('DOMContentLoaded', () => {
@@ -520,7 +474,6 @@
     document.getElementById('modal-close').addEventListener('click', () => {
       document.getElementById('result-modal').style.display = 'none';
     });
-
     ['login-email','login-pw'].forEach(id => {
       document.getElementById(id)?.addEventListener('keydown', e => { if (e.key === 'Enter') handleLogin(); });
     });
@@ -529,20 +482,12 @@
 
 <style>
   :root {
-    --bg: #F4F6F8;
-    --surface: #FFFFFF;
-    --surface2: #F9FAFB;
-    --text-main: #111827;
-    --text-sub: #4B5563;
-    --text-light: #9CA3AF;
+    --bg: #F4F6F8; --surface: #FFFFFF; --surface2: #F9FAFB;
+    --text-main: #111827; --text-sub: #4B5563; --text-light: #9CA3AF;
     --border: #E5E7EB;
-    --kbio-blue: #2A5C9E;
-    --kbio-blue-light: #EBF3FA;
-    --kbio-orange: #F39C12;
-    --kbio-orange-light: #FEF5E7;
-    --green: #10B981;
-    --red: #EF4444;
-    --radius: 12px;
+    --kbio-blue: #2A5C9E; --kbio-blue-light: #EBF3FA; --kbio-blue-dark: #1d4375;
+    --kbio-orange: #F39C12; --kbio-orange-light: #FEF5E7;
+    --green: #10B981; --red: #EF4444; --radius: 12px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text-main); font-family: 'Noto Sans KR', sans-serif; font-size: 15px; line-height: 1.5; min-height: 100vh; -webkit-font-smoothing: antialiased; }
@@ -554,14 +499,6 @@
   .hero h1 { font-size: clamp(22px, 5vw, 38px); font-weight: 900; color: var(--text-main); letter-spacing: -0.5px; margin-bottom: 16px; }
   .hero-info { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; max-width: 700px; margin: 0 auto; }
   .hero-info span { background: var(--surface2); border: 1px solid var(--border); padding: 6px 14px; border-radius: 6px; color: var(--text-sub); font-size: 13px; font-weight: 600; }
-
-  /* ── 유저바 중앙 정렬 수정 ── */
-  #user-bar { display: none; background: var(--kbio-blue); color: #fff; padding: 12px 20px; justify-content: center; align-items: center; flex-wrap: wrap; gap: 24px; }
-  .user-bar-left { font-size: 15px; font-weight: 600; }
-  .user-bar-right { display: flex; gap: 12px; }
-  .bar-btn { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: #fff; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
-  .bar-btn:hover { background: rgba(255,255,255,0.35); }
-  .bar-btn-outline { background: transparent; }
 
   /* ── 인증 화면 ── */
   #auth-screen { display: none; justify-content: center; align-items: flex-start; padding: 40px 16px 80px; }
@@ -577,25 +514,40 @@
   .auth-field input::placeholder { color: var(--text-light); }
   .auth-pw-hint { font-size: 12px; color: var(--text-light); margin-top: 4px; }
   .auth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  /* 개인정보 수집 및 이용동의 창 크기 확대 */
   .auth-privacy { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 12px; font-size: 12px; line-height: 1.7; color: var(--text-sub); max-height: 200px; overflow-y: auto; }
   .auth-agree { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; font-size: 13px; font-weight: 600; color: var(--kbio-blue); }
   .auth-agree input { width: 18px; height: 18px; accent-color: var(--kbio-blue); }
   .auth-submit { width: 100%; background: var(--kbio-blue); color: #fff; border: none; border-radius: 8px; padding: 14px; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; transition: all 0.2s; }
-  .auth-submit:hover { background: #204A80; }
+  .auth-submit:hover { background: var(--kbio-blue-dark); }
   .auth-submit:disabled { background: var(--text-light); cursor: not-allowed; }
   .auth-divider { text-align: center; margin: 16px 0; font-size: 13px; color: var(--text-light); }
 
-  /* ── 메인 앱 ── */
-  #main-app { display: none; }
+  /* ── 통합 메인 컨테이너 (유저바 포함) ── */
+  #main-app-container { display: none; }
+  
+  /* 유저 네비게이션 바 (가운데 탭 분리, 우측 프로필) */
+  .user-nav-bar { background: var(--kbio-blue-dark); color: #fff; padding: 0 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 100; }
+  .user-nav-inner { max-width: 1000px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; height: 56px; }
+  .user-nav-links { display: flex; gap: 4px; height: 100%; }
+  .nav-btn { background: transparent; border: none; color: rgba(255,255,255,0.6); font-size: 15px; font-weight: 700; padding: 0 20px; cursor: pointer; transition: all 0.2s; font-family: inherit; height: 100%; border-bottom: 3px solid transparent; }
+  .nav-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .nav-btn.active { color: #fff; border-bottom-color: var(--kbio-orange); background: rgba(255,255,255,0.1); }
+  .user-nav-profile { display: flex; align-items: center; gap: 16px; }
+  .profile-text { font-size: 14px; font-weight: 500; }
+  .logout-btn { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; color: #fff; transition: all 0.2s; font-family: inherit; }
+  .logout-btn:hover { background: rgba(255,255,255,0.3); }
+
   .container { max-width: 1000px; margin: 0 auto; padding: 32px 16px 80px; }
   .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
-  .section-title { display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 700; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid var(--border); }
-  .step-badge { width: 28px; height: 28px; border-radius: 6px; background: var(--kbio-orange); color: #fff; font-size: 14px; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+  .section-title { display: flex; align-items: center; justify-content: space-between; font-size: 18px; font-weight: 700; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid var(--border); }
+  .step-badge { width: 28px; height: 28px; border-radius: 6px; background: var(--kbio-orange); color: #fff; font-size: 14px; font-weight: 900; display: inline-flex; align-items: center; justify-content: center; margin-right: 12px; }
+  .live-badge { font-size: 12px; color: var(--green); background: #E1F0E8; padding: 4px 10px; border-radius: 20px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .live-dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); } 100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
 
-  /* 공지사항 박스 스타일 */
-  .notice-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 24px; font-size: 14px; color: var(--text-sub); line-height: 1.7; }
+  .notice-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 32px; font-size: 15px; color: var(--text-sub); line-height: 1.8; text-align: center; }
 
+  /* 테이블 */
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 24px; }
   .slot-table { width: 100%; border-collapse: collapse; min-width: 680px; background: var(--surface); }
   .slot-table th { background: #F3F4F6; color: var(--text-main); font-size: 13px; font-weight: 700; padding: 14px 8px; text-align: center; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
@@ -627,16 +579,11 @@
   .contact-box h4 { color: var(--text-main); margin-bottom: 12px; font-size: 15px; }
   .submit-wrap { text-align: center; }
   #submit-btn { background: var(--kbio-blue); color: #fff; border: none; border-radius: 8px; padding: 18px 60px; font-size: 18px; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(42,92,158,0.2); width: 100%; max-width: 400px; font-family: inherit; }
-  #submit-btn:hover { background: #204A80; transform: translateY(-2px); }
+  #submit-btn:hover { background: var(--kbio-blue-dark); transform: translateY(-2px); }
   #submit-btn:disabled { background: var(--text-light); cursor: not-allowed; transform: none; box-shadow: none; }
 
-  /* ── 마이페이지 ── */
-  #mypage-screen { display: none; }
-  .mypage-container { max-width: 700px; margin: 0 auto; padding: 32px 16px 80px; }
-  .mypage-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
-  .mypage-title { font-size: 22px; font-weight: 900; color: var(--text-main); }
-  .back-to-main { background: none; border: 1px solid var(--border); color: var(--text-sub); padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
-  .back-to-main:hover { border-color: var(--kbio-blue); color: var(--kbio-blue); }
+  /* 마이페이지 내역 */
+  .mypage-title { font-size: 22px; font-weight: 900; color: var(--text-main); margin-bottom: 24px; }
   .mypage-info-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; margin-bottom: 20px; }
   .mypage-info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
   .info-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-light); margin-bottom: 2px; letter-spacing: 0.5px; }
@@ -655,15 +602,9 @@
   .cancel-btn:hover { background: var(--red); color: #fff; }
   .empty-state { text-align: center; padding: 60px 20px; color: var(--text-light); font-size: 15px; }
 
-  /* ── 공통 ── */
-  .badge { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; }
-  .badge-blue { background: var(--kbio-blue-light); color: var(--kbio-blue); }
-  .badge-orange { background: var(--kbio-orange-light); color: var(--kbio-orange); }
-  .badge-gray { background: #F3F4F6; color: var(--text-sub); }
   .toast { position: fixed; bottom: 40px; left: 50%; transform: translate(-50%, 20px); background: #374151; color: #fff; padding: 14px 28px; border-radius: 30px; font-size: 14px; font-weight: 500; z-index: 9999; transition: all 0.3s cubic-bezier(0.68,-0.55,0.265,1.55); opacity: 0; pointer-events: none; white-space: nowrap; }
   .toast.show { transform: translate(-50%, 0); opacity: 1; }
-  .toast-error { background: var(--red); }
-  .toast-success { background: var(--green); }
+  .toast-error { background: var(--red); } .toast-success { background: var(--green); }
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(17,24,39,0.7); z-index: 999; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px); }
   .modal-box { background: var(--surface); border-radius: 16px; padding: 40px 32px; max-width: 440px; width: 100%; position: relative; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
   .modal-title { font-size: 22px; font-weight: 800; color: var(--kbio-blue); margin-bottom: 24px; text-align: center; }
@@ -673,19 +614,15 @@
   .result-time { font-weight: 700; color: var(--text-main); }
   .result-notice { margin-top: 16px; font-size: 13px; color: var(--text-sub); text-align: center; background: #F9FAFB; padding: 12px; border-radius: 6px; margin-bottom: 12px; }
   .btn-mypage-link { display: block; width: 100%; margin-top: 8px; background: var(--kbio-blue); color: #fff; border: none; border-radius: 8px; padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; }
-  .admin-link { text-align: center; margin-top: 40px; }
-  .admin-link a { font-size: 13px; color: var(--text-light); text-decoration: underline; }
 
   @media (max-width: 640px) {
-    .hero { padding: 32px 16px 24px; }
-    .hero h1 { font-size: 22px; }
+    .hero { padding: 32px 16px 24px; } .hero h1 { font-size: 22px; }
+    .user-nav-inner { flex-direction: column; height: auto; padding: 10px 0; gap: 10px; }
     .section { padding: 24px 16px; border-radius: 0; border-left: none; border-right: none; }
-    .form-grid { grid-template-columns: 1fr; }
-    .auth-grid { grid-template-columns: 1fr; }
+    .form-grid, .auth-grid { grid-template-columns: 1fr; }
     .auth-box { padding: 28px 20px; }
     #submit-btn { border-radius: 0; position: fixed; bottom: 0; left: 0; width: 100%; max-width: 100%; padding: 18px; z-index: 100; }
     body { padding-bottom: 80px; }
-    .mypage-container { padding: 24px 16px 80px; }
   }
 </style>
 </head>
@@ -701,16 +638,6 @@
     <span>💡 1인 최대 3개 시간대 선택 가능 (동시간대 중복 불가)</span>
   </div>
 </header>
-
-<div id="user-bar">
-  <div class="user-bar-inner">
-    <div class="user-bar-left">👤 <span id="user-name-display"></span> 로그인 중</div>
-    <div class="user-bar-right">
-      <button class="bar-btn" onclick="showMyPage()">📋 내 신청 내역</button>
-      <button class="bar-btn bar-btn-outline" onclick="handleLogout()">로그아웃</button>
-    </div>
-  </div>
-</div>
 
 <div id="auth-screen">
   <div class="auth-box">
@@ -799,62 +726,76 @@
   </div>
 </div>
 
-<div id="main-app">
-  <main class="container">
-
-    <div class="section">
-      <div class="section-title">
-        <span class="step-badge" style="background-color: var(--kbio-blue);">i</span>
-        공지사항
+<div id="main-app-container">
+  
+  <div class="user-nav-bar">
+    <div class="user-nav-inner">
+      <div class="user-nav-links">
+        <button class="nav-btn" onclick="switchNav('notice')">📢 공지사항</button>
+        <button class="nav-btn" onclick="switchNav('apply')">📝 부스 신청</button>
+        <button class="nav-btn" onclick="switchNav('mypage')">📋 마이페이지</button>
       </div>
-      <div class="notice-box">
-        ※ 행사에 대한 세부 안내사항이 추후 이곳에 공지될 예정입니다.<br>
+      <div class="user-nav-profile">
+        <span class="profile-text">👤 <strong id="user-name-display"></strong>님</span>
+        <button class="logout-btn" onclick="handleLogout()">로그아웃</button>
       </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">
-        <span class="step-badge">1</span>
-        상담 슬롯 선택 <span style="font-size:14px;font-weight:500;color:var(--text-light);margin-left:8px;">(최대 3개 시간대 선택 가능)</span>
-      </div>
-      <div class="table-wrap">
-        <table class="slot-table">
-          <thead id="table-head"></thead>
-          <tbody id="table-body"></tbody>
-        </table>
-      </div>
-      <div class="selected-wrap">
-        <span class="selected-label">나의 선택 내역 및 사전 질문 작성</span>
-        <div class="selected-area" id="selected-summary"></div>
-      </div>
-    </div>
-
-    <div class="contact-box">
-      <h4>📞 문의처</h4>
-      <p><strong>[행사 관련]</strong> 한국바이오협회 박영진 주임 (031-628-0048 / yjpark@koreabio.org)</p>
-      <p><strong>[사업 참여 관련]</strong> 각 주관대학 사업단 문의</p>
-    </div>
-
-    <div class="submit-wrap">
-      <button id="submit-btn">상담부스 예약 완료하기</button>
-    </div>
-
-    <div class="admin-link">
-      <a href="admin_roundup_bix2026.html">사무국 전용 관리자 페이지</a>
-    </div>
-  </main>
-</div>
-
-<div id="mypage-screen">
-  <div class="mypage-container">
-    <div class="mypage-header">
-      <div class="mypage-title">📋 내 신청 내역</div>
-      <button class="back-to-main" onclick="showMainApp()">← 신청 페이지로</button>
-    </div>
-    <div id="mypage-content">
-      <div class="empty-state">불러오는 중...</div>
     </div>
   </div>
+
+  <main class="container">
+    
+    <div id="view-notice" style="display:none;">
+      <div class="section">
+        <div class="section-title">
+          <div><span class="step-badge" style="background-color: var(--kbio-blue);">i</span> 행사 공지사항</div>
+        </div>
+        <div class="notice-box">
+          <br>※ 행사에 대한 세부 안내사항 및 참가 혜택 등이 추후 이곳에 공지될 예정입니다.<br><br>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-apply" style="display:none;">
+      <div class="section">
+        <div class="section-title">
+          <div>
+            <span class="step-badge">1</span> 상담 슬롯 선택
+            <span style="font-size:14px;font-weight:500;color:var(--text-light);margin-left:8px;">(최대 3개 시간대 선택 가능)</span>
+          </div>
+          <div class="live-badge">
+            <div class="live-dot"></div> 실시간 연동 중
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="slot-table">
+            <thead id="table-head"></thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+        <div class="selected-wrap">
+          <span class="selected-label">나의 선택 내역 및 사전 질문 작성</span>
+          <div class="selected-area" id="selected-summary"></div>
+        </div>
+      </div>
+
+      <div class="contact-box">
+        <h4>📞 문의처</h4>
+        <p><strong>[행사 관련]</strong> 한국바이오협회 박영진 주임 (031-628-0048 / yjpark@koreabio.org)</p>
+        <p><strong>[사업 참여 관련]</strong> 각 주관대학 사업단 문의</p>
+      </div>
+      <div class="submit-wrap">
+        <button id="submit-btn">상담부스 예약 완료하기</button>
+      </div>
+    </div>
+
+    <div id="view-mypage" style="display:none;">
+      <div class="mypage-title">📋 내 신청 내역</div>
+      <div id="mypage-content">
+        <div class="empty-state">데이터를 불러오는 중입니다...</div>
+      </div>
+    </div>
+
+  </main>
 </div>
 
 <div class="toast" id="toast"></div>
