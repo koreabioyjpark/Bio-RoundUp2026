@@ -51,9 +51,24 @@
   function getSlotStatus(data) {
     const reg = data?.registrations?.length || 0;
     const wait = data?.waitlist?.length || 0;
-    if (reg < MAX_REGULAR) return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
-    if (wait < MAX_WAITLIST) return { type: 'waitlist', label: `예비${wait+1}`, sub: '대기신청' };
-    return { type: 'closed', label: '마감', sub: '현장접수' };
+    
+    // 핵심 로직: 예비자가 한 명이라도 있으면, 정규 자리가 비어도 '마감(예비 대기중)'으로 표시
+    if (wait > 0) {
+      if (reg < MAX_REGULAR) {
+        return { type: 'closed', label: '마감', sub: '예비 대기중' }; 
+      }
+      if (wait < MAX_WAITLIST) {
+        return { type: 'waitlist', label: `예비${wait + 1}`, sub: '대기신청' };
+      }
+      return { type: 'closed', label: '마감', sub: '현장접수' };
+    } else {
+      // 예비자가 없는 평시 상태
+      if (reg < MAX_REGULAR) {
+        return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
+      }
+      // 정규가 3명 꽉 찼고 예비자가 아직 없을 때
+      return { type: 'waitlist', label: '예비1', sub: '대기신청' };
+    }
   }
 
   onAuthStateChanged(auth, async (user) => {

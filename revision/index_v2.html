@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>2026년 라운드업 상담부스 신청</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Bebas+Neue&display=swap" rel="stylesheet">
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, updateDoc, runTransaction, arrayUnion, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyAziEj4z6Uo7TnZpFwCimaw4mOjyfjgRjI",
+    authDomain: "bio-roundup-2026.firebaseapp.com",
+    projectId: "bio-roundup-2026",
+    storageBucket: "bio-roundup-2026.firebasestorage.app",
+    messagingSenderId: "109569887388",
+    appId: "1:109569887388:web:f06ef486a6df185947b159",
+    measurementId: "G-QEFPF4QJBL"
+  };
+
+  const DESK_NAMES = [
+    "기업 1", "기업 2", "기업 3",
+    "기업 4", "기업 5", "기업 6"
+  ];
+
+  const TIME_SLOTS = [
+    "14:00~14:20", "14:20~14:40", "14:40~15:00",
+    "15:00~15:20", "15:20~15:40", "15:40~16:00"
+  ];
+
+  const MAX_REGULAR = 3;   
+  const MAX_WAITLIST = 3;  
+  const MAX_PER_PERSON = 3; 
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  function slotId(deskIdx, timeIdx) {
+    return `desk${deskIdx + 1}_time${timeIdx + 1}`;
+  }
+
+  function getSlotStatus(data) {
+    const reg = data?.registrations?.length || 0;
+    const wait = data?.waitlist?.length || 0;
+    if (reg < MAX_REGULAR) return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
+    if (wait < MAX_WAITLIST) return { type: 'waitlist', label: `예비${wait + 1}`, sub: '대기신청' };
+    return { type: 'closed', label: '마감', sub: '현장접수' };
+  }
+
+  let slotsCache = {}; 
+  let selectedSlots = new Set();
+  let preQuestions = {}; 
+
+  window.removeSlotById = (id) => {
+    selectedSlots.delete(id);
+    const [d, t] = id.replace('desk', '').replace('_time', ',').split(',').map(x => Number(x)-1);
+    updateSlotUI(d, t);
+    updateSelectedSummary();
+  };
+
+  window.updatePreQuestion = (id, val) => {
+    preQuestions[id] = val;
+  };
+
+  function subscribeSlots() {
+    for (let d = 0; d < 6; d++) {
+      for (let t = 0; t < 6; t++) {
+        const id = slotId(d, t);
+        const ref = doc(db, "slots", id);
+        onSnapshot(ref, (snap) => {
+          slotsCache[id] = snap.exists() ? snap.data() : { registrations: [], waitlist: [] };
+          updateSlotUI(d, t);
+        });
+      }
+    }
+  }
+
+  function updateSlotUI(deskIdx, timeIdx) {
+    const id = slotId(deskIdx, timeIdx);
+    const data = slotsCache[id] || { registrations: [], waitlist: [] };
+    const status = getSlotStatus(data);
+    const cell = document.getElementById(`cell_${id}`);
+    if (!cell) return;
+
+    const isSelected = selectedSlots.has(id);
+    cell.className = `slot-cell slot-${status.type}${isSelected ? ' slot-selected' : ''}`;
+    cell.innerHTML = `
+      <span class="slot-sub">${status.sub}</span>
+      <span class="slot-label">${status.label}</span>
+    `;
+    cell.onclick = status.type === 'closed' ? null : () => toggleSlot(deskIdx, timeIdx);
+  }
+
+  function toggleSlot(deskIdx, timeIdx) {
+    const id = slotId(deskIdx, timeIdx);
+    const data = slotsCache[id] || { registrations: [], waitlist: [] };
+    const status = getSlotStatus(data);
+    if (status.type === 'closed') return;
+
+    if (selectedSlots.has(id)) {
+      selectedSlots.delete(id);
+    } else {
+      const hasSameTime = [...selectedSlots].some(existingId => existingId.endsWith(`_time${timeIdx + 1}`));
+      if (hasSameTime) {
+        showToast('같은 시간대에는 하나의 기업만 선택할 수 있습니다.', 'error');
+        return;
+      }
+      if (selectedSlots.size >= MAX_PER_PERSON) {
+        showToast(`최대 ${MAX_PER_PERSON}개까지만 선택 가능합니다.`, 'error');
+        return;
+      }
+      selectedSlots.add(id);
+    }
+    updateSlotUI(deskIdx, timeIdx);
+    updateSelectedSummary();
+  }
+
+  function updateSelectedSummary() {
+    const area = document.getElementById('selected-summary');
+    if (!area) return;
+    if (selectedSlots.size === 0) {
+      area.innerHTML = '<div class="summary-empty">하단 표에서 원하시는 상담 시간을 선택해 주세요.</div>';
+    } else {
+      const items = [...selectedSlots].map(id => {
+        const [d, t] = id.replace('desk', '').replace('_time', ',').split(',').map(Number);
+        const val = preQuestions[id] || '';
+        return `
+          <div class="question-card">
+            <div class="question-header">
+              <span class="summary-tag">${DESK_NAMES[d - 1]} · ${TIME_SLOTS[t - 1]}</span>
+              <button class="remove-btn" onclick="window.removeSlotById('${id}')">삭제 ✕</button>
+            </div>
+            <textarea class="question-textarea" placeholder="${DESK_NAMES[d - 1]} 멘토님에게 궁금한 점을 미리 작성해 주세요. (선택사항)" oninput="window.updatePreQuestion('${id}', this.value)">${val}</textarea>
+          </div>
+        `;
+      });
+      area.innerHTML = items.join('');
+    }
+  }
+
+  async function handleSubmit() {
+    const btn = document.getElementById('submit-btn');
+
+    const isParticipant = document.querySelector('input[name="is-participant"]:checked')?.value;
+    if (isParticipant === 'no') {
+      showToast('부트캠프 참여학생만 신청 가능합니다.', 'error');
+      return;
+    }
+    if (isParticipant !== 'yes') {
+      showToast('부트캠프 사업 참여 여부를 확인해 주세요.', 'error');
+      return;
+    }
+
+    const hostUniv = document.getElementById('f-host-univ').value;
+    const actualUniv = document.getElementById('f-actual-univ').value.trim();
+    const studentId = document.getElementById('f-studentid').value.trim();
+    const name = document.getElementById('f-name').value.trim();
+    const phone = document.getElementById('f-phone').value.trim();
+    const email = document.getElementById('f-email').value.trim();
+    const agree = document.getElementById('f-agree').checked;
+
+    if (!hostUniv || !actualUniv || !studentId || !name || !phone || !email) {
+      showToast('모든 필수 항목을 입력해 주세요.', 'error'); return;
+    }
+    if (!agree) {
+      showToast('개인정보 수집 및 이용에 동의해 주세요.', 'error'); return;
+    }
+    if (selectedSlots.size === 0) {
+      showToast('신청할 상담 슬롯을 1개 이상 선택해 주세요.', 'error'); return;
+    }
+    const emailReg = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailReg.test(email)) {
+      showToast('올바른 이메일 형식을 입력해 주세요.', 'error'); return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '신청 처리 중...';
+
+    try {
+      const applicantRef = doc(db, "applicants", studentId);
+      const applicantSnap = await getDoc(applicantRef);
+      const existingSlots = applicantSnap.exists() ? (applicantSnap.data().slots || []) : [];
+
+      if (existingSlots.length + selectedSlots.size > MAX_PER_PERSON) {
+        const remaining = MAX_PER_PERSON - existingSlots.length;
+        showToast(`이미 ${existingSlots.length}건이 신청되어 있습니다. (잔여 ${remaining}건)`, 'error');
+        btn.disabled = false; btn.textContent = '신청 완료하기';
+        return;
+      }
+
+      // 호스트 대학과 실제 대학 정보 모두 저장
+      const applicantInfo = { hostUniv, actualUniv, studentId, name, phone, email, appliedAt: new Date().toISOString() };
+      const results = [];
+
+      for (const id of selectedSlots) {
+        const slotRef = doc(db, "slots", id);
+        let resultType = '';
+
+        await runTransaction(db, async (transaction) => {
+          const slotSnap = await transaction.get(slotRef);
+          const slotData = slotSnap.exists() ? slotSnap.data() : { registrations: [], waitlist: [] };
+          const reg = slotData.registrations || [];
+          const wait = slotData.waitlist || [];
+
+          const alreadyApplied = [...reg, ...wait].some(r => r.studentId === studentId);
+          if (alreadyApplied) { resultType = 'duplicate'; return; }
+
+          const currentQuestion = preQuestions[id] || '';
+
+          if (reg.length < MAX_REGULAR) {
+            transaction.update(slotRef, { registrations: arrayUnion({ ...applicantInfo, slot: id, preQuestion: currentQuestion }) });
+            resultType = 'regular';
+          } else if (wait.length < MAX_WAITLIST) {
+            const waitNum = wait.length + 1;
+            transaction.update(slotRef, { waitlist: arrayUnion({ ...applicantInfo, slot: id, waitNum, preQuestion: currentQuestion }) });
+            resultType = `waitlist_${waitNum}`;
+          } else {
+            resultType = 'closed';
+          }
+        });
+
+        const [d, t] = id.replace('desk', '').replace('_time', ',').split(',').map(Number);
+        results.push({ id, deskName: DESK_NAMES[d - 1], time: TIME_SLOTS[t - 1], type: resultType });
+      }
+
+      const newSlotIds = results.filter(r => r.type !== 'duplicate' && r.type !== 'closed').map(r => r.id);
+      if (newSlotIds.length > 0) {
+        if (applicantSnap.exists()) {
+          await updateDoc(applicantRef, { slots: arrayUnion(...newSlotIds) });
+        } else {
+          const { setDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+          await setDoc(applicantRef, { ...applicantInfo, slots: newSlotIds });
+        }
+      }
+
+      showResultModal(results, name);
+    } catch (err) {
+      console.error(err);
+      showToast('시스템 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '신청 완료하기';
+    }
+  }
+
+  function showResultModal(results, name) {
+    const modal = document.getElementById('result-modal');
+    const body = document.getElementById('result-body');
+    let html = `<div class="result-greeting"><strong>${name}</strong>님의 상담 신청 내역입니다.</div>`;
+    results.forEach(r => {
+      let badge = '';
+      if (r.type === 'regular') badge = '<span class="badge badge-blue">정규 신청 확정</span>';
+      else if (r.type.startsWith('waitlist')) badge = `<span class="badge badge-orange">예비 ${r.type.split('_')[1]}번</span>`;
+      else if (r.type === 'closed') badge = '<span class="badge badge-gray">마감 (현장 문의)</span>';
+      else if (r.type === 'duplicate') badge = '<span class="badge badge-gray">중복 신청 건</span>';
+      html += `<div class="result-row">${badge} <span class="result-time">${r.deskName} · ${r.time}</span></div>`;
+    });
+    html += `<div class="result-notice">※ 예비 신청자는 현장 상황에 따라 순차적으로 개별 안내해 드립니다.</div>`;
+    body.innerHTML = html;
+    modal.style.display = 'flex';
+
+    selectedSlots.clear();
+    preQuestions = {};
+    updateSelectedSummary();
+    for (let d = 0; d < 6; d++) for (let t = 0; t < 6; t++) updateSlotUI(d, t);
+  }
+
+  function showToast(msg, type = 'info') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast toast-${type} show`;
+    setTimeout(() => t.classList.remove('show'), 3000);
+  }
+
+  function handleEligibilityChange(e) {
+    if(e.target.value === 'no') {
+      showToast('부트캠프 참여학생만 신청 가능합니다.', 'error');
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    buildTable();
+    subscribeSlots();
+    updateSelectedSummary();
+
+    document.getElementById('submit-btn').addEventListener('click', handleSubmit);
+    document.getElementById('modal-close').addEventListener('click', () => {
+      document.getElementById('result-modal').style.display = 'none';
+    });
+
+    const radios = document.querySelectorAll('input[name="is-participant"]');
+    radios.forEach(r => r.addEventListener('change', handleEligibilityChange));
+  });
+
+  function buildTable() {
+    const thead = document.getElementById('table-head');
+    const tbody = document.getElementById('table-body');
+
+    let headHtml = '<tr><th class="th-desk">데스크 구분</th>';
+    TIME_SLOTS.forEach(t => headHtml += `<th>${t}</th>`);
+    headHtml += '</tr>';
+    thead.innerHTML = headHtml;
+
+    let bodyHtml = '';
+    DESK_NAMES.forEach((deskName, dIdx) => {
+      bodyHtml += `<tr><td class="td-desk"><strong>${deskName}</strong></td>`;
+      for (let tIdx = 0; tIdx < 6; tIdx++) {
+        const id = slotId(dIdx, tIdx);
+        bodyHtml += `<td id="cell_${id}" class="slot-cell">
+          <span class="slot-sub">-</span>
+          <span class="slot-label">불러오는 중</span>
+        </td>`;
+      }
+      bodyHtml += '</tr>';
+    });
+    tbody.innerHTML = bodyHtml;
+  }
+</script>
+
+<style>
+  :root {
+    --bg: #F4F6F8;
+    --surface: #FFFFFF;
+    --surface2: #F9FAFB;
+    --text-main: #111827;
+    --text-sub: #4B5563;
+    --text-light: #9CA3AF;
+    --border: #E5E7EB;
+    --kbio-blue: #2A5C9E;
+    --kbio-blue-light: #EBF3FA;
+    --kbio-orange: #F39C12;
+    --kbio-orange-light: #FEF5E7;
+    --green: #10B981;
+    --red: #EF4444;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text-main); font-family: 'Noto Sans KR', sans-serif; font-size: 15px; line-height: 1.5; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+  .hero { background: var(--surface); border-bottom: 1px solid var(--border); padding: 40px 20px 32px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.02); }
+  .hero-badge { display: inline-block; background: var(--kbio-blue-light); color: var(--kbio-blue); font-size: 13px; font-weight: 700; padding: 6px 16px; border-radius: 20px; margin-bottom: 12px; }
+  .hero h1 { font-size: clamp(26px, 6vw, 42px); font-weight: 900; color: var(--text-main); letter-spacing: -0.5px; margin-bottom: 16px; }
+  .hero-info { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; max-width: 600px; margin: 0 auto; }
+  .hero-info span { background: var(--surface2); border: 1px solid var(--border); padding: 6px 14px; border-radius: 6px; color: var(--text-sub); font-size: 13px; font-weight: 600; }
+  .container { max-width: 1000px; margin: 0 auto; padding: 32px 16px 80px; }
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
+  .section-title { display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 700; margin-bottom: 24px; color: var(--text-main); padding-bottom: 16px; border-bottom: 2px solid var(--border); }
+  .step-badge { width: 28px; height: 28px; border-radius: 6px; background: var(--kbio-orange); color: #fff; font-size: 14px; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+  
+  .eligibility-box { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+  .eligibility-box h4 { color: #D97706; margin-bottom: 10px; font-size: 16px; display: flex; align-items: center; gap: 6px; }
+  .eligibility-box p { font-size: 14px; color: var(--text-sub); margin-bottom: 10px; }
+  .eligibility-box ul { font-size: 13px; color: var(--kbio-blue); margin-bottom: 12px; margin-left: 20px; line-height: 1.6; }
+  .eligibility-box a { color: var(--kbio-blue); font-weight: 600; text-decoration: none; }
+  .eligibility-box a:hover { text-decoration: underline; }
+  .warning-text { font-size: 13px !important; color: var(--red) !important; font-weight: 600; margin-bottom: 16px !important; }
+  .radio-group { display: flex; flex-direction: column; gap: 10px; }
+  .radio-label { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; cursor: pointer;}
+  .radio-label input { width: 18px; height: 18px; accent-color: var(--kbio-blue); }
+
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-sub); margin-bottom: 8px; }
+  .form-group label .req { color: var(--kbio-orange); }
+  .form-group input, .form-group select { width: 100%; background: var(--surface); border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px 16px; color: var(--text-main); font-size: 15px; transition: all 0.2s; font-family: inherit; }
+  .form-group input:focus, .form-group select:focus { border-color: var(--kbio-blue); box-shadow: 0 0 0 3px var(--kbio-blue-light); outline: none; }
+  .form-group input::placeholder { color: var(--text-light); }
+  
+  .privacy-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-top: 24px; font-size: 13px; line-height: 1.6; color: var(--text-sub); }
+  .privacy-title { font-weight: 700; color: var(--text-main); margin-bottom: 12px; display: block; }
+  .privacy-list { margin-left: 16px; margin-bottom: 12px; }
+  .privacy-list li { margin-bottom: 4px; }
+  .agree-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 12px 16px; background: var(--kbio-blue-light); border-radius: 8px; border: 1px solid rgba(42,92,158,0.1); }
+  .agree-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--kbio-blue); cursor: pointer; }
+  .agree-row label { font-size: 14px; font-weight: 600; color: var(--kbio-blue); cursor: pointer; }
+
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 24px; }
+  .slot-table { width: 100%; border-collapse: collapse; min-width: 680px; background: var(--surface); }
+  .slot-table th { background: #F3F4F6; color: var(--text-main); font-size: 13px; font-weight: 700; padding: 14px 8px; text-align: center; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
+  .td-desk { background: var(--surface); color: var(--text-main); font-size: 14px; padding: 14px 12px; text-align: center; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); }
+  .slot-cell { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); padding: 12px 8px; text-align: center; cursor: pointer; transition: background 0.2s; }
+  .slot-cell:hover { background: var(--surface2); }
+  .slot-sub { display: block; font-size: 11px; color: var(--text-light); margin-bottom: 4px; }
+  .slot-label { display: inline-block; font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 12px; }
+  .slot-open .slot-label { background: #E1F0E8; color: var(--green); }
+  .slot-waitlist .slot-label { background: var(--kbio-orange-light); color: var(--kbio-orange); }
+  .slot-closed { cursor: not-allowed; background: #F9FAFB; }
+  .slot-closed .slot-label { background: #FEE2E2; color: var(--red); }
+  .slot-selected { background: var(--kbio-blue-light) !important; box-shadow: inset 0 0 0 2px var(--kbio-blue); }
+  .slot-selected .slot-label { background: var(--kbio-blue); color: #FFF; }
+
+  .selected-wrap { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 24px; }
+  .selected-label { font-size: 15px; color: var(--text-main); font-weight: 700; margin-bottom: 16px; display: block; }
+  .selected-area { display: flex; flex-direction: column; gap: 16px; min-height: 32px; }
+  .summary-empty { font-size: 14px; color: var(--text-light); text-align: center; padding: 20px 0; }
+  .question-card { background: var(--surface); border: 1px solid #D1D5DB; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);}
+  .question-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .summary-tag { background: var(--kbio-blue-light); color: var(--kbio-blue); font-size: 14px; font-weight: 700; padding: 6px 12px; border-radius: 6px; }
+  .remove-btn { background: none; border: none; color: var(--text-light); font-size: 13px; font-weight: 600; cursor: pointer; }
+  .remove-btn:hover { color: var(--red); }
+  .question-textarea { width: 100%; height: 80px; border: 1px solid #E5E7EB; border-radius: 6px; padding: 12px; font-size: 14px; font-family: inherit; resize: vertical; color: var(--text-main); }
+  .question-textarea:focus { border-color: var(--kbio-blue); outline: none; }
+
+  .contact-box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 32px; font-size: 14px; line-height: 1.6; color: var(--text-sub); }
+  .contact-box h4 { color: var(--text-main); margin-bottom: 12px; font-size: 15px; }
+  .submit-wrap { text-align: center; }
+  #submit-btn { background: var(--kbio-blue); color: #fff; border: none; border-radius: 8px; padding: 18px 60px; font-size: 18px; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(42,92,158,0.2); width: 100%; max-width: 400px; }
+  #submit-btn:hover { background: #204A80; transform: translateY(-2px); }
+  #submit-btn:disabled { background: var(--text-light); cursor: not-allowed; transform: none; box-shadow: none;}
+
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(17,24,39,0.7); z-index: 999; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px); }
+  .modal-box { background: var(--surface); border-radius: 16px; padding: 40px 32px; max-width: 440px; width: 100%; position: relative; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+  .modal-title { font-size: 22px; font-weight: 800; color: var(--kbio-blue); margin-bottom: 24px; text-align: center; }
+  #modal-close { position: absolute; top: 20px; right: 20px; background: #F3F4F6; border: none; color: var(--text-sub); width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 16px; font-weight: bold; }
+  .result-greeting { text-align: center; margin-bottom: 20px; color: var(--text-main); font-size: 15px; }
+  .result-row { display: flex; align-items: center; justify-content: space-between; background: var(--surface2); padding: 14px 16px; border-radius: 8px; margin-bottom: 8px; border: 1px solid var(--border); }
+  .badge { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; }
+  .badge-blue { background: var(--kbio-blue-light); color: var(--kbio-blue); }
+  .badge-orange { background: var(--kbio-orange-light); color: var(--kbio-orange); }
+  .badge-gray { background: #F3F4F6; color: var(--text-sub); }
+  .result-time { font-weight: 700; color: var(--text-main); }
+  .result-notice { margin-top: 24px; font-size: 13px; color: var(--text-sub); text-align: center; background: #F9FAFB; padding: 12px; border-radius: 6px; }
+  .toast { position: fixed; bottom: 40px; left: 50%; transform: translate(-50%, 20px); background: #374151; color: #fff; padding: 14px 28px; border-radius: 30px; font-size: 14px; font-weight: 500; z-index: 9999; transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55); opacity: 0; pointer-events: none; }
+  .toast.show { transform: translate(-50%, 0); opacity: 1; }
+  .toast-error { background: var(--red); }
+  .admin-link { text-align: center; margin-top: 40px; }
+  .admin-link a { font-size: 13px; color: var(--text-light); text-decoration: underline; }
+
+  @media (max-width: 640px) {
+    .hero { padding: 32px 16px 24px; }
+    .hero h1 { font-size: 24px; }
+    .section { padding: 24px 16px; border-radius: 0; border-left: none; border-right: none; }
+    .form-grid { grid-template-columns: 1fr; }
+    #submit-btn { border-radius: 0; position: fixed; bottom: 0; left: 0; width: 100%; max-width: 100%; padding: 18px; z-index: 100; font-size: 18px; }
+    body { padding-bottom: 80px; } 
+    .admin-link { margin-bottom: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <img src="협회.png" alt="한국바이오협회 로고" style="height:48px; margin-bottom:20px; object-fit: contain;">
+  <div>
+    <div class="hero-badge">2026년 첨단산업 인재양성 부트캠프사업</div>
+  </div>
+  <h1>Round Up! 기업 멘토링 부스 신청</h1>
+  <div class="hero-info">
+    <span>🗓 2026. 10. 30.(금) 14:00~16:00</span>
+    <span>📍 코엑스 3층 컨퍼런스룸</span>
+    <span>💡 1인 최대 3개 시간대 선택 가능 (동시간대 중복 불가)</span>
+  </div>
+</header>
+
+<main class="container">
+
+  <div class="section">
+    <div class="section-title">
+      <span class="step-badge">1</span>
+      참여자 정보 입력
+    </div>
+
+    <div class="eligibility-box">
+      <h4>🚨 신청 자격 확인</h4>
+      <p>본 행사는 교육부 소관의 "첨단산업 인재양성 부트캠프사업"의 아래 <strong>바이오분야 주관대학 4개교 사업에 참여하는 학생</strong>만 신청 가능합니다.</p>
+      <ul>
+        <li><a href="https://biobootcamp.gachon.ac.kr" target="_blank">가천대학교 부트캠프 사업단</a></li>
+        <li><a href="https://biobootcamp.yu.ac.kr" target="_blank">영남대학교 부트캠프 사업단</a></li>
+        <li><a href="http://cnubiobc.kr" target="_blank">충남대학교 부트캠프 사업단</a></li>
+        <li><a href="https://biobootcamp.hannam.ac.kr" target="_blank">한남대학교 부트캠프 사업단</a></li>
+      </ul>
+      <p class="warning-text">※ 추후 확인 후 부트캠프 참여 학생이 아닐 경우 통보 없이 취소될 수 있습니다.</p>
+      
+      <div class="radio-group">
+        <label class="radio-label">
+          <input type="radio" name="is-participant" value="yes"> 예, 부트캠프 참여 학생이 맞습니다.
+        </label>
+        <label class="radio-label">
+          <input type="radio" name="is-participant" value="no"> 아니오
+        </label>
+      </div>
+    </div>
+
+    <div class="form-grid">
+      <div class="form-group">
+        <label>참여 중인 사업단 (주관대학) <span class="req">*</span></label>
+        <select id="f-host-univ">
+          <option value="">사업단을 선택해 주세요</option>
+          <option value="가천대학교">가천대학교 부트캠프</option>
+          <option value="영남대학교">영남대학교 부트캠프</option>
+          <option value="충남대학교">충남대학교 부트캠프</option>
+          <option value="한남대학교">한남대학교 부트캠프</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>실제 소속 대학 (참여대학) <span class="req">*</span></label>
+        <input id="f-actual-univ" type="text" placeholder="예) 한밭대학교">
+      </div>
+      <div class="form-group">
+        <label>학번 <span class="req">*</span></label>
+        <input id="f-studentid" type="text" placeholder="예) 202312345">
+      </div>
+      <div class="form-group">
+        <label>성명 <span class="req">*</span></label>
+        <input id="f-name" type="text" placeholder="실명을 입력해 주세요">
+      </div>
+      <div class="form-group">
+        <label>휴대전화번호 <span class="req">*</span></label>
+        <input id="f-phone" type="tel" placeholder="010-0000-0000">
+      </div>
+      <div class="form-group">
+        <label>이메일 <span class="req">*</span></label>
+        <input id="f-email" type="email" placeholder="example@naver.com">
+      </div>
+    </div>
+
+    <div class="privacy-box">
+      <span class="privacy-title">[필수] 개인정보 수집 및 이용 동의 안내</span>
+      한국바이오협회는 본 행사의 원활한 운영을 위해 아래와 같이 개인정보를 수집 및 이용합니다.<br><br>
+      <ul class="privacy-list">
+        <li><strong>수집 항목:</strong> 소속 대학, 학번, 성명, 휴대전화번호, 이메일</li>
+        <li><strong>이용 목적:</strong> 상담부스 신청 접수 확인, 일정 안내, 현장 본인 확인 및 사후 통계</li>
+        <li><strong>보유 기간:</strong> <strong>행사 종료 후 1년 후 파기</strong></li>
+      </ul>
+      귀하는 개인정보 수집 및 이용 동의를 거부할 권리가 있으나, 미동의 시 상담 예약 및 행사 참여가 제한됩니다.
+    </div>
+    
+    <div class="agree-row">
+      <input type="checkbox" id="f-agree">
+      <label for="f-agree">위 개인정보 수집 및 이용 내용에 동의합니다.</label>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">
+      <span class="step-badge">2</span>
+      상담 슬롯 선택 <span style="font-size:14px; font-weight:500; color:var(--text-light); margin-left:8px;">(최대 3개 시간대 선택 가능)</span>
+    </div>
+
+    <div class="table-wrap">
+      <table class="slot-table">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+
+    <div class="selected-wrap">
+      <span class="selected-label">나의 선택 내역 및 사전 질문 작성</span>
+      <div class="selected-area" id="selected-summary"></div>
+    </div>
+  </div>
+
+  <div class="contact-box">
+    <h4>📞 문의처</h4>
+    <p><strong>[행사 관련]</strong> 한국바이오협회 박영진 주임 (031-628-0048 / yjpark@koreabio.org)</p>
+    <p><strong>[사업 참여 관련]</strong> 각 주관대학 사업단 문의</p>
+  </div>
+
+  <div class="submit-wrap">
+    <button id="submit-btn">상담부스 예약 완료하기</button>
+  </div>
+
+  <div class="admin-link">
+    <a href="admin_roundup_bix2026.html">사무국 전용 관리자 페이지</a>
+  </div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="result-modal">
+  <div class="modal-box">
+    <button id="modal-close">✕</button>
+    <div class="modal-title">✅ 신청 완료</div>
+    <div id="result-body"></div>
+  </div>
+</div>
+
+</body>
+</html>

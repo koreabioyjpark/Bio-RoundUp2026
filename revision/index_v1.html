@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>라운드업 상담부스 신청</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Bebas+Neue&display=swap" rel="stylesheet">
+
+<!-- ★ Firebase SDK ★ -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, updateDoc, runTransaction, arrayUnion, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ============================================================
+  // ★★★ 여기에 Firebase 프로젝트 설정값을 입력하세요 ★★★
+  // Firebase Console → 프로젝트 설정 → 웹앱 추가 → 아래 값 복사
+  // ============================================================
+  const firebaseConfig = {
+    apiKey: "AIzaSyAziEj4z6Uo7TnZpFwCimaw4mOjyfjgRjI",
+    authDomain: "bio-roundup-2026.firebaseapp.com",
+    projectId: "bio-roundup-2026",
+    storageBucket: "bio-roundup-2026.firebasestorage.app",
+    messagingSenderId: "109569887388",
+    appId: "1:109569887388:web:f06ef486a6df185947b159",
+    measurementId: "G-QEFPF4QJBL"
+  };
+
+  // ============================================================
+  // ★★★ 데스크 이름 커스텀 (필요시 수정) ★★★
+  // ============================================================
+  const DESK_NAMES = [
+    "기업 1", "기업 2", "기업 3",
+    "기업 4", "기업 5", "기업 6"
+  ];
+
+  const TIME_SLOTS = [
+    "14:00~14:20", "14:20~14:40", "14:40~15:00",
+    "15:00~15:20", "15:20~15:40", "15:40~16:00"
+  ];
+
+  const MAX_REGULAR = 3;   // 정규 정원
+  const MAX_WAITLIST = 3;  // 예비 정원
+  const MAX_PER_PERSON = 2; // 1인 최대 신청 수
+
+  // Firebase 초기화
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  // 슬롯 ID 생성 함수
+  function slotId(deskIdx, timeIdx) {
+    return `desk${deskIdx + 1}_time${timeIdx + 1}`;
+  }
+
+  // 슬롯 상태 라벨 계산
+  function getSlotStatus(data) {
+    const reg = data?.registrations?.length || 0;
+    const wait = data?.waitlist?.length || 0;
+    if (reg < MAX_REGULAR) return { type: 'open', label: `${reg}/${MAX_REGULAR}`, sub: '신청가능' };
+    if (wait < MAX_WAITLIST) return { type: 'waitlist', label: `예비${wait + 1}번`, sub: '예비신청' };
+    return { type: 'closed', label: '마감', sub: '' };
+  }
+
+  // ── 전역 상태 ──
+  let slotsCache = {}; // { slotId: { registrations: [], waitlist: [] } }
+  let selectedSlots = new Set();
+
+  // ── 실시간 슬롯 데이터 구독 ──
+  function subscribeSlots() {
+    for (let d = 0; d < 6; d++) {
+      for (let t = 0; t < 6; t++) {
+        const id = slotId(d, t);
+        const ref = doc(db, "slots", id);
+        onSnapshot(ref, (snap) => {
+          slotsCache[id] = snap.exists() ? snap.data() : { registrations: [], waitlist: [] };
+          updateSlotUI(d, t);
+        });
+      }
+    }
+  }
+
+  function updateSlotUI(deskIdx, timeIdx) {
+    const id = slotId(deskIdx, timeIdx);
+    const data = slotsCache[id] || { registrations: [], waitlist: [] };
+    const status = getSlotStatus(data);
+    const cell = document.getElementById(`cell_${id}`);
+    if (!cell) return;
+
+    const isSelected = selectedSlots.has(id);
+    cell.className = `slot-cell slot-${status.type}${isSelected ? ' slot-selected' : ''}`;
+    cell.innerHTML = `
+      <span class="slot-sub">${status.sub}</span>
+      <span class="slot-label">${status.label}</span>
+    `;
+    cell.onclick = status.type === 'closed' ? null : () => toggleSlot(deskIdx, timeIdx);
+    cell.style.cursor = status.type === 'closed' ? 'not-allowed' : 'pointer';
+  }
+
+  function toggleSlot(deskIdx, timeIdx) {
+    const id = slotId(deskIdx, timeIdx);
+    const data = slotsCache[id] || { registrations: [], waitlist: [] };
+    const status = getSlotStatus(data);
+    if (status.type === 'closed') return;
+
+    if (selectedSlots.has(id)) {
+      selectedSlots.delete(id);
+    } else {
+      if (selectedSlots.size >= MAX_PER_PERSON) {
+        showToast(`최대 ${MAX_PER_PERSON}개까지만 선택할 수 있습니다.`, 'warn');
+        return;
+      }
+      selectedSlots.add(id);
+    }
+    updateSlotUI(deskIdx, timeIdx);
+    updateSelectedSummary();
+  }
+
+  function updateSelectedSummary() {
+    const area = document.getElementById('selected-summary');
+    if (!area) return;
+    if (selectedSlots.size === 0) {
+      area.innerHTML = '<span class="summary-empty">선택한 슬롯이 없습니다</span>';
+    } else {
+      const items = [...selectedSlots].map(id => {
+        const [d, t] = id.replace('desk', '').replace('_time', ',').split(',').map(Number);
+        return `<span class="summary-tag">${DESK_NAMES[d - 1]} · ${TIME_SLOTS[t - 1]}</span>`;
+      });
+      area.innerHTML = items.join('');
+    }
+  }
+
+  // ── 제출 처리 ──
+  async function handleSubmit() {
+    const btn = document.getElementById('submit-btn');
+
+    // 입력값 수집
+    const univ = document.getElementById('f-univ').value.trim();
+    const studentId = document.getElementById('f-studentid').value.trim();
+    const name = document.getElementById('f-name').value.trim();
+    const phone = document.getElementById('f-phone').value.trim();
+    const email = document.getElementById('f-email').value.trim();
+    const agree = document.getElementById('f-agree').checked;
+
+    // 유효성 검사
+    if (!univ || !studentId || !name || !phone || !email) {
+      showToast('모든 항목을 입력해주세요.', 'error'); return;
+    }
+    if (!agree) {
+      showToast('개인정보 수집 및 이용에 동의해주세요.', 'error'); return;
+    }
+    if (selectedSlots.size === 0) {
+      showToast('신청할 슬롯을 선택해주세요.', 'error'); return;
+    }
+    const emailReg = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailReg.test(email)) {
+      showToast('이메일 형식을 확인해주세요.', 'error'); return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '처리 중...';
+
+    try {
+      // 학번 기준 기존 신청 수 확인
+      const applicantRef = doc(db, "applicants", studentId);
+      const applicantSnap = await getDoc(applicantRef);
+      const existingSlots = applicantSnap.exists() ? (applicantSnap.data().slots || []) : [];
+
+      if (existingSlots.length + selectedSlots.size > MAX_PER_PERSON) {
+        const remaining = MAX_PER_PERSON - existingSlots.length;
+        showToast(`이미 ${existingSlots.length}개 신청되어 있습니다. ${remaining}개만 더 신청 가능합니다.`, 'error');
+        btn.disabled = false; btn.textContent = '신청하기';
+        return;
+      }
+
+      const applicantInfo = { univ, studentId, name, phone, email, appliedAt: new Date().toISOString() };
+      const results = [];
+
+      // 각 슬롯 트랜잭션 처리
+      for (const id of selectedSlots) {
+        const slotRef = doc(db, "slots", id);
+        let resultType = '';
+
+        await runTransaction(db, async (transaction) => {
+          const slotSnap = await transaction.get(slotRef);
+          const slotData = slotSnap.exists() ? slotSnap.data() : { registrations: [], waitlist: [] };
+          const reg = slotData.registrations || [];
+          const wait = slotData.waitlist || [];
+
+          // 중복 신청 방지
+          const alreadyApplied = [...reg, ...wait].some(r => r.studentId === studentId);
+          if (alreadyApplied) { resultType = 'duplicate'; return; }
+
+          if (reg.length < MAX_REGULAR) {
+            transaction.update(slotRef, { registrations: arrayUnion({ ...applicantInfo, slot: id }) });
+            resultType = 'regular';
+          } else if (wait.length < MAX_WAITLIST) {
+            const waitNum = wait.length + 1;
+            transaction.update(slotRef, { waitlist: arrayUnion({ ...applicantInfo, slot: id, waitNum }) });
+            resultType = `waitlist_${waitNum}`;
+          } else {
+            resultType = 'closed';
+          }
+        });
+
+        const [d, t] = id.replace('desk', '').replace('_time', ',').split(',').map(Number);
+        results.push({ id, deskName: DESK_NAMES[d - 1], time: TIME_SLOTS[t - 1], type: resultType });
+      }
+
+      // applicants 문서 업데이트
+      const newSlotIds = results.filter(r => r.type !== 'duplicate' && r.type !== 'closed').map(r => r.id);
+      if (newSlotIds.length > 0) {
+        if (applicantSnap.exists()) {
+          await updateDoc(applicantRef, { slots: arrayUnion(...newSlotIds) });
+        } else {
+          const { setDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+          await setDoc(applicantRef, { ...applicantInfo, slots: newSlotIds });
+        }
+      }
+
+      showResultModal(results, name);
+    } catch (err) {
+      console.error(err);
+      showToast('오류가 발생했습니다. 다시 시도해주세요.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '신청하기';
+    }
+  }
+
+  function showResultModal(results, name) {
+    const modal = document.getElementById('result-modal');
+    const body = document.getElementById('result-body');
+    let html = `<p class="result-greeting"><strong>${name}</strong>님의 신청 결과</p>`;
+    results.forEach(r => {
+      let badge = '';
+      if (r.type === 'regular') badge = '<span class="badge badge-green">정규 신청 완료</span>';
+      else if (r.type.startsWith('waitlist')) badge = `<span class="badge badge-yellow">예비 ${r.type.split('_')[1]}번</span>`;
+      else if (r.type === 'closed') badge = '<span class="badge badge-red">마감 (현장 접수)</span>';
+      else if (r.type === 'duplicate') badge = '<span class="badge badge-gray">이미 신청됨</span>';
+      html += `<div class="result-row">${badge} <span>${r.deskName} · ${r.time}</span></div>`;
+    });
+    html += `<p class="result-notice">예비 신청의 경우 현장에서 자리가 날 경우 입장 가능합니다.</p>`;
+    body.innerHTML = html;
+    modal.style.display = 'flex';
+
+    // 선택 초기화
+    selectedSlots.clear();
+    updateSelectedSummary();
+    for (let d = 0; d < 6; d++) for (let t = 0; t < 6; t++) updateSlotUI(d, t);
+  }
+
+  // ── Toast 알림 ──
+  function showToast(msg, type = 'info') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast toast-${type} show`;
+    setTimeout(() => t.classList.remove('show'), 3000);
+  }
+
+  // ── DOM 로드 후 초기화 ──
+  window.addEventListener('DOMContentLoaded', () => {
+    buildTable();
+    subscribeSlots();
+    updateSelectedSummary();
+
+    document.getElementById('submit-btn').addEventListener('click', handleSubmit);
+    document.getElementById('modal-close').addEventListener('click', () => {
+      document.getElementById('result-modal').style.display = 'none';
+    });
+  });
+
+  function buildTable() {
+    const thead = document.getElementById('table-head');
+    const tbody = document.getElementById('table-body');
+
+    // 헤더
+    let headHtml = '<tr><th class="th-desk">상담 데스크</th>';
+    TIME_SLOTS.forEach(t => headHtml += `<th>${t}</th>`);
+    headHtml += '</tr>';
+    thead.innerHTML = headHtml;
+
+    // 바디
+    let bodyHtml = '';
+    DESK_NAMES.forEach((deskName, dIdx) => {
+      bodyHtml += `<tr><td class="td-desk">${deskName}</td>`;
+      for (let tIdx = 0; tIdx < 6; tIdx++) {
+        const id = slotId(dIdx, tIdx);
+        bodyHtml += `<td id="cell_${id}" class="slot-cell slot-open">
+          <span class="slot-sub">로딩중</span>
+          <span class="slot-label">...</span>
+        </td>`;
+      }
+      bodyHtml += '</tr>';
+    });
+    tbody.innerHTML = bodyHtml;
+  }
+</script>
+
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #161922;
+    --surface2: #1e2230;
+    --border: #2a2f3e;
+    --accent: #4f8ef7;
+    --accent2: #7c3aed;
+    --green: #22c55e;
+    --yellow: #f59e0b;
+    --red: #ef4444;
+    --gray: #6b7280;
+    --text: #e8eaf0;
+    --text2: #9ca3af;
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* 헤더 */
+  .hero {
+    background: linear-gradient(135deg, #0d0f14 0%, #1a1040 50%, #0d1a2e 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 48px 24px 40px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -60px; left: 50%;
+    transform: translateX(-50%);
+    width: 600px; height: 300px;
+    background: radial-gradient(ellipse, rgba(79,142,247,0.15) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-block;
+    background: rgba(79,142,247,0.15);
+    border: 1px solid rgba(79,142,247,0.4);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 4px 14px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+  }
+  .hero h1 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(40px, 8vw, 72px);
+    letter-spacing: 4px;
+    background: linear-gradient(90deg, #fff 0%, var(--accent) 60%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1;
+    margin-bottom: 12px;
+  }
+  .hero-info {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  .hero-info span {
+    color: var(--text2);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .hero-info span::before {
+    content: '▸';
+    color: var(--accent);
+  }
+
+  /* 레이아웃 */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 16px 80px;
+  }
+
+  /* 섹션 */
+  .section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    margin-bottom: 20px;
+  }
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 22px;
+    color: var(--text);
+  }
+  .step-badge {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* 폼 */
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+  }
+  .form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text2);
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+  .form-group label .req {
+    color: var(--accent);
+    margin-left: 2px;
+  }
+  .form-group input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .form-group input:focus { border-color: var(--accent); }
+  .form-group input::placeholder { color: var(--gray); }
+
+  /* 개인정보 동의 */
+  .privacy-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+    max-height: 140px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--text2);
+  }
+  .privacy-box::-webkit-scrollbar { width: 4px; }
+  .privacy-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .agree-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .agree-row input[type="checkbox"] {
+    width: 18px; height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .agree-row label {
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  /* 시간표 */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .slot-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 620px;
+  }
+  .slot-table th {
+    background: var(--surface2);
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 10px 8px;
+    text-align: center;
+    border: 1px solid var(--border);
+    letter-spacing: 0.3px;
+  }
+  .th-desk { min-width: 90px; }
+  .td-desk {
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 12px;
+    text-align: center;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  /* 슬롯 셀 */
+  .slot-cell {
+    border: 1px solid var(--border);
+    padding: 8px 4px;
+    text-align: center;
+    transition: all 0.15s;
+    min-width: 80px;
+  }
+  .slot-cell .slot-sub {
+    display: block;
+    font-size: 10px;
+    color: var(--text2);
+    margin-bottom: 3px;
+    letter-spacing: 0.3px;
+  }
+  .slot-cell .slot-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .slot-open { background: rgba(34,197,94,0.08); }
+  .slot-open:hover { background: rgba(34,197,94,0.2); transform: scale(1.03); }
+  .slot-open .slot-label { color: var(--green); }
+  .slot-waitlist { background: rgba(245,158,11,0.08); }
+  .slot-waitlist:hover { background: rgba(245,158,11,0.2); transform: scale(1.03); }
+  .slot-waitlist .slot-label { color: var(--yellow); }
+  .slot-closed { background: rgba(239,68,68,0.06); cursor: not-allowed !important; }
+  .slot-closed .slot-label { color: var(--red); }
+  .slot-closed .slot-sub { color: var(--red); opacity: 0.7; }
+  .slot-selected { outline: 2px solid var(--accent); outline-offset: -2px; background: rgba(79,142,247,0.18) !important; }
+  .slot-selected .slot-label { color: var(--accent) !important; }
+
+  /* 선택 요약 */
+  .selected-area {
+    margin-top: 16px;
+    min-height: 36px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .summary-empty { font-size: 13px; color: var(--gray); }
+  .summary-tag {
+    display: inline-block;
+    background: rgba(79,142,247,0.15);
+    border: 1px solid rgba(79,142,247,0.4);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 20px;
+  }
+  .selected-label {
+    font-size: 13px;
+    color: var(--text2);
+    font-weight: 500;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  /* 제출 버튼 */
+  .submit-wrap {
+    text-align: center;
+    margin-top: 8px;
+  }
+  #submit-btn {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 14px 48px;
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: opacity 0.2s, transform 0.15s;
+    box-shadow: 0 4px 20px rgba(79,142,247,0.3);
+  }
+  #submit-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  #submit-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  /* 범례 */
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+  .dot-green { background: var(--green); }
+  .dot-yellow { background: var(--yellow); }
+  .dot-red { background: var(--red); }
+  .dot-blue { background: var(--accent); }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px 24px;
+    border-radius: 30px;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 9999;
+    transition: transform 0.3s, opacity 0.3s;
+    opacity: 0;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  .toast-error { border-color: var(--red); color: var(--red); }
+  .toast-warn { border-color: var(--yellow); color: var(--yellow); }
+
+  /* 결과 모달 */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 999;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 440px;
+    width: 100%;
+    position: relative;
+  }
+  .modal-title {
+    font-size: 20px;
+    font-weight: 900;
+    margin-bottom: 20px;
+    text-align: center;
+  }
+  #modal-close {
+    position: absolute;
+    top: 16px; right: 16px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .result-greeting {
+    text-align: center;
+    margin-bottom: 16px;
+    color: var(--text2);
+    font-size: 14px;
+  }
+  .result-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .badge-green { background: rgba(34,197,94,0.2); color: var(--green); }
+  .badge-yellow { background: rgba(245,158,11,0.2); color: var(--yellow); }
+  .badge-red { background: rgba(239,68,68,0.2); color: var(--red); }
+  .badge-gray { background: rgba(107,114,128,0.2); color: var(--gray); }
+  .result-notice {
+    margin-top: 16px;
+    font-size: 12px;
+    color: var(--text2);
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  /* 관리자 링크 */
+  .admin-link {
+    text-align: center;
+    margin-top: 40px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+  .admin-link a {
+    font-size: 12px;
+    color: var(--gray);
+    text-decoration: none;
+  }
+  .admin-link a:hover { color: var(--text2); }
+
+  @media (max-width: 600px) {
+    .hero { padding: 32px 16px 28px; }
+    .section { padding: 20px 16px; }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <img src="logo.png" alt="로고" style="height:60px; margin-bottom:16px;">
+  <div class="hero-badge">2026년 첨단산업 인재양성 부트캠프 라운드업</div>
+  <h1>상담부스 신청</h1>
+  <div class="hero-info">
+    <span>일시: 2026년 10월 30일(금) 14:00 ~ 16:00</span>
+    <span>장소: 코엑스 3층 컨퍼런스룸 000호</span>
+    <span>총 6개 기업 상담 데스크</span>
+    <span>1인 최대 2개 신청</span>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- STEP 1: 개인정보 입력 -->
+  <div class="section">
+    <div class="section-title">
+      <span class="step-badge">1</span>
+      개인정보 입력
+    </div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>대학명 <span class="req">*</span></label>
+        <input id="f-univ" type="text" placeholder="예) 가천대학교">
+      </div>
+      <div class="form-group">
+        <label>학번 <span class="req">*</span></label>
+        <input id="f-studentid" type="text" placeholder="예) 202312345">
+      </div>
+      <div class="form-group">
+        <label>이름 <span class="req">*</span></label>
+        <input id="f-name" type="text" placeholder="홍길동">
+      </div>
+      <div class="form-group">
+        <label>연락처 <span class="req">*</span></label>
+        <input id="f-phone" type="tel" placeholder="010-1234-5678">
+      </div>
+      <div class="form-group" style="grid-column: 1/-1;">
+        <label>이메일 <span class="req">*</span></label>
+        <input id="f-email" type="email" placeholder="example@university.ac.kr">
+      </div>
+    </div>
+
+    <div class="privacy-box">
+      <strong>개인정보 수집 및 이용 동의</strong><br><br>
+      <strong>수집 항목:</strong> 대학명, 학번, 이름, 연락처, 이메일<br>
+      <strong>수집 목적:</strong> 라운드업 행사 상담부스 예약 신청 접수 및 확인, 결과 안내<br>
+      <strong>보유 기간:</strong> 행사 종료 후 30일<br>
+      <strong>제3자 제공:</strong> 없음<br><br>
+      위 개인정보 수집·이용에 동의하지 않을 권리가 있으나, 동의 거부 시 상담부스 신청이 제한될 수 있습니다.
+    </div>
+    <div class="agree-row">
+      <input type="checkbox" id="f-agree">
+      <label for="f-agree">개인정보 수집 및 이용에 동의합니다 <span style="color:var(--accent)">*</span></label>
+    </div>
+  </div>
+
+  <!-- STEP 2: 슬롯 선택 -->
+  <div class="section">
+    <div class="section-title">
+      <span class="step-badge">2</span>
+      상담 슬롯 선택 <span style="font-size:13px; font-weight:400; color:var(--text2); margin-left:4px;">(최대 2개)</span>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot dot-green"></div> 신청가능</div>
+      <div class="legend-item"><div class="legend-dot dot-yellow"></div> 예비신청</div>
+      <div class="legend-item"><div class="legend-dot dot-red"></div> 마감</div>
+      <div class="legend-item"><div class="legend-dot dot-blue"></div> 선택됨</div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="slot-table">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+
+    <div style="margin-top: 20px;">
+      <span class="selected-label">선택된 슬롯</span>
+      <div class="selected-area" id="selected-summary"></div>
+    </div>
+  </div>
+
+  <!-- 제출 -->
+  <div class="submit-wrap">
+    <button id="submit-btn">신청하기</button>
+  </div>
+
+  <div class="admin-link">
+    <a href="admin.html">관리자 페이지 →</a>
+  </div>
+
+</main>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- 결과 모달 -->
+<div class="modal-overlay" id="result-modal">
+  <div class="modal-box">
+    <button id="modal-close">✕</button>
+    <div class="modal-title">✅ 신청 완료</div>
+    <div id="result-body"></div>
+  </div>
+</div>
+
+</body>
+</html>
