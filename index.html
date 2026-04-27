@@ -266,15 +266,26 @@
     // ★ 3개 제한 제출단 방어 로직 (이중 보안)
     const bookedCount = currentUserData?.slots?.length || 0;
     if (selectedSlots.size + bookedCount > MAX_PER_PERSON) {
-       showToast(`신청 횟수를 초과했습니다. (최대 ${MAX_PER_PERSON}개)`, 'error');
-       return;
+      showToast(`신청 횟수를 초과했습니다. (최대 ${MAX_PER_PERSON}개)`, 'error');
+      return;
     }
 
     const btn = document.getElementById('submit-btn');
     btn.disabled = true; btn.textContent = '실시간 정원 확인 중...';
 
-    const { univ, studentId, name, phone, email } = currentUserData;
-    const applicantInfo = { uid: currentUser.uid, univ, studentId, name, phone, email, appliedAt: new Date().toISOString() };
+    // ★ 학과(major), 학년(grade) 추가 수집
+    const { univ, major, grade, studentId, name, phone, email } = currentUserData;
+    const applicantInfo = { 
+      uid: currentUser.uid, 
+      univ: univ || '', 
+      major: major || '', 
+      grade: grade || '', 
+      studentId: studentId || '', 
+      name: name || '', 
+      phone: phone || '', 
+      email: email || '', 
+      appliedAt: new Date().toISOString() 
+    };
     const results = [];
 
     try {
@@ -284,6 +295,7 @@
 
         await runTransaction(db, async (transaction) => {
           const slotSnap = await transaction.get(slotRef);
+          // 슬롯이 없으면 빈 배열로 가상 초기화
           const slotData = slotSnap.exists() ? slotSnap.data() : { registrations: [], waitlist: [] };
           const reg  = slotData.registrations || [];
           const wait = slotData.waitlist || [];
@@ -298,12 +310,14 @@
 
           if (wait.length === 0 && reg.length < MAX_REGULAR) {
             const newRegs = [...reg, newEntry];
-            transaction.update(slotRef, { registrations: newRegs });
+            // ★ 방이 없으면 알아서 만들고 합치기 (set + merge)
+            transaction.set(slotRef, { registrations: newRegs }, { merge: true });
             resultType = 'regular';
           } else if (wait.length < MAX_WAITLIST) {
             const waitNum = wait.length + 1;
             const newWaitlist = [...wait, { ...newEntry, waitNum }];
-            transaction.update(slotRef, { waitlist: newWaitlist });
+            // ★ 방이 없으면 알아서 만들고 합치기 (set + merge)
+            transaction.set(slotRef, { waitlist: newWaitlist }, { merge: true });
             resultType = `waitlist_${waitNum}`;
           } else {
             resultType = 'closed';
