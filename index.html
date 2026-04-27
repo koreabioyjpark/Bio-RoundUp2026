@@ -390,12 +390,13 @@
       // ★ 마이페이지 배지 디자인 변경 ★
       let statusBadge = '';
       if (status === 'regular') {
-        statusBadge = '<span class="badge" style="background-color: #E1F0E8; color: #10B981; border: 1px solid #10B981;">상담 확정</span>';
+        statusBadge = '<span class="mypage-badge mypage-badge-green">상담 확정</span>';
       } else if (status.startsWith('waitlist')) {
         const num = status.split('_')[1];
-        statusBadge = `<span class="badge" style="background-color: #FFFBEB; color: #D97706; border: 1px solid #FDE68A;">예비 ${num}번</span>`;
+        // '번'을 빼서 "예비 3" 형태로 출력
+        statusBadge = `<span class="mypage-badge mypage-badge-orange">예비 ${num}</span>`;
       } else {
-        statusBadge = '<span class="badge badge-gray">확인 필요</span>';
+        statusBadge = '<span class="mypage-badge mypage-badge-gray">확인 필요</span>';
       }
 
       return `
@@ -656,6 +657,19 @@
     #submit-btn { border-radius: 0; position: fixed; bottom: 0; left: 0; width: 100%; max-width: 100%; padding: 18px; z-index: 100; }
     body { padding-bottom: 80px; }
   }
+
+  /* ★ 마이페이지 상태 배지 (슬롯 선택 디자인과 동일하게 맞춤) ★ */
+  .mypage-badge {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 800;
+    padding: 4px 12px;
+    border-radius: 20px; /* 완전한 둥근 모서리 */
+  }
+  .mypage-badge-green { background: #E1F0E8; color: var(--green); }
+  .mypage-badge-orange { background: var(--kbio-orange-light); color: var(--kbio-orange); }
+  .mypage-badge-gray { background: #F3F4F6; color: var(--text-sub); }
+
 </style>
 </head>
 <body>
