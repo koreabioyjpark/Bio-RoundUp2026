@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>라운드업 관리자 | Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&family=Bebas+Neue&display=swap" rel="stylesheet">
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, collection, getDocs, doc, getDoc, updateDoc, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, updateDoc, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAziEj4z6Uo7TnZpFwCimaw4mOjyfjgRjI",
@@ -63,13 +63,14 @@
           const snap = await getDoc(doc(db, "slots", id));
           if (snap.exists()) {
             const data = snap.data();
-            (data.registrations || []).forEach(r => allData.push({ ...r, deskIdx: d, timeIdx: t, status: '정규', slotId: id }));
-            (data.waitlist || []).forEach(r => allData.push({ ...r, deskIdx: d, timeIdx: t, status: `예비 ${r.waitNum}번`, slotId: id }));
+            (data.registrations || []).forEach(r => allData.push({ ...r, deskIdx: d, timeIdx: t, status: '상담 확정', slotId: id }));
+            (data.waitlist || []).forEach(r => allData.push({ ...r, deskIdx: d, timeIdx: t, status: `예비 ${r.waitNum}번`, waitNum: r.waitNum, slotId: id }));
           }
         }
       }
       updateStats();
-      renderTable();
+      renderDashboard(); // 현장 대시보드 렌더링
+      renderTable();     // 엑셀표 렌더링
     } catch (e) {
       alert('데이터 로드 실패: ' + e.message);
     } finally {
@@ -78,10 +79,77 @@
     }
   }
 
-// ★ 강력한 상태 관리 컨트롤러 (승격, 강등, 완전삭제 및 예비번호 자동정렬) ★
+  // ★ 탭 전환 로직 ★
+  window.switchAdminTab = (tab) => {
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelector(`[onclick="switchAdminTab('${tab}')"]`).classList.add('active');
+    document.getElementById('view-dashboard').style.display = tab === 'dashboard' ? 'block' : 'none';
+    document.getElementById('view-list').style.display = tab === 'list' ? 'block' : 'none';
+  };
+
+  // ★ 현장 대시보드 렌더링 로직 ★
+  function renderDashboard() {
+    const container = document.getElementById('dashboard-grid');
+    let html = '';
+    
+    for (let d = 0; d < 6; d++) {
+      html += `<div class="board-col"><div class="board-col-title">${DESK_NAMES[d]}</div>`;
+      for (let t = 0; t < 6; t++) {
+        const slotId = `desk${d+1}_time${t+1}`;
+        const items = allData.filter(r => r.slotId === slotId);
+        const regs = items.filter(r => r.status === '상담 확정');
+        const waits = items.filter(r => r.status.includes('예비'));
+        
+        html += `<div class="board-slot">
+                  <div class="board-time">${TIME_SLOTS[t]} <span style="font-weight:normal; color:#9ca3af; font-size:11px;">(${regs.length}/3명)</span></div>`;
+        
+        if (regs.length === 0 && waits.length === 0) {
+          html += `<div class="board-empty">예약 없음</div>`;
+        } else {
+          // 확정자 렌더링
+          regs.forEach(r => {
+            html += `
+              <div class="board-item item-reg">
+                <div class="item-info">
+                  <strong>${r.name}</strong> <span class="item-univ">${r.univ}</span>
+                </div>
+                <div class="item-actions">
+                  <button class="action-icon" onclick="handleActionDirect('demote', '${slotId}', '${r.uid}')" title="예비 대기로 강등">⬇</button>
+                  <button class="action-icon action-del" onclick="handleActionDirect('delete', '${slotId}', '${r.uid}')" title="신청 취소">✖</button>
+                </div>
+              </div>`;
+          });
+          // 대기자 렌더링
+          waits.forEach(r => {
+            html += `
+              <div class="board-item item-wait">
+                <div class="item-info">
+                  <span class="wait-badge">예비 ${r.waitNum}</span>
+                  <strong>${r.name}</strong> <span class="item-univ">${r.univ}</span>
+                </div>
+                <div class="item-actions">
+                  ${regs.length < 3 ? `<button class="action-icon action-up" onclick="handleActionDirect('promote', '${slotId}', '${r.uid}')" title="상담 확정으로 전환">⬆</button>` : ''}
+                  <button class="action-icon action-del" onclick="handleActionDirect('delete', '${slotId}', '${r.uid}')" title="신청 취소">✖</button>
+                </div>
+              </div>`;
+          });
+        }
+        html += `</div>`; // board-slot 닫기
+      }
+      html += `</div>`; // board-col 닫기
+    }
+    container.innerHTML = html;
+  }
+
+  window.handleActionDirect = async (action, slotId, uid) => {
+    const mockSelectEl = { value: action };
+    await handleAction(mockSelectEl, slotId, uid);
+  };
+
+  // 기존 상태 관리 로직
   window.handleAction = async (selectEl, slotId, uid) => {
     const action = selectEl.value;
-    selectEl.value = ""; // 선택 후 드롭다운 초기화
+    selectEl.value = ""; 
     if (!action) return;
 
     const slotRef = doc(db, "slots", slotId);
@@ -103,27 +171,23 @@
         let msg = ""; 
 
         if (action === 'delete') {
-          if(!confirm("해당 신청을 취소하시겠습니까?")) throw new Error("CANCEL");
+          if(!confirm(`[${student.name}] 학생의 신청을 취소하시겠습니까?`)) throw new Error("CANCEL");
           regs = regs.filter(r => r.uid !== uid);
           waits = waits.filter(r => r.uid !== uid);
-          // 정중한 취소 안내
-          msg = `안내드립니다. 신청하신 ${boothInfo} 상담이 관리자에 의해 취소되었습니다. 자세한 사항은 문의 부탁드립니다.`;
+          msg = `안내드립니다. 신청하신 ${boothInfo} 상담이 관리자에 의해 취소되었습니다. 자세한 사항은 사무국으로 문의 부탁드립니다.`;
         } else if (action === 'promote') {
-          if(!confirm("상담 확정 상태로 변경하시겠습니까?")) throw new Error("CANCEL");
-          if(regs.length >= 3) throw new Error("정원 초과");
+          if(!confirm(`[${student.name}] 학생을 상담 확정 상태로 변경하시겠습니까?`)) throw new Error("CANCEL");
+          if(regs.length >= 3) throw new Error("정원 초과로 확정할 수 없습니다.");
           waits = waits.filter(r => r.uid !== uid);
           regs.push({ ...student, waitNum: null });
-          // 확정 안내 및 시간 엄수 강조
           msg = `안내드립니다. 신청하신 ${boothInfo} 상담이 "상담 확정" 상태로 변경되었습니다. 예약된 시간에 맞춰 참여 부탁드립니다.`;
         } else if (action === 'demote') {
-          if(!confirm("예비 대기 상태로 변경하시겠습니까?")) throw new Error("CANCEL");
+          if(!confirm(`[${student.name}] 학생을 예비 대기 상태로 변경하시겠습니까?`)) throw new Error("CANCEL");
           regs = regs.filter(r => r.uid !== uid);
           waits.push({ ...student });
-          // 자동 확정 오해 방지 문구로 수정
           msg = `안내드립니다. 신청하신 ${boothInfo} 상담이 "예비 대기" 상태로 변경되었습니다. 취소자 발생 시 순번에 따라 상태 변경 후 개별 안내드릴 예정입니다.`;
         }
 
-        // 예비번호 자동 재정렬
         waits = waits.map((item, idx) => ({...item, waitNum: idx + 1}));
         t.update(slotRef, { registrations: regs, waitlist: waits });
 
@@ -135,8 +199,8 @@
       if (action === 'delete') {
         const aSnap = await getDoc(appRef);
         if(aSnap.exists()) {
-          const newSlots = (aSnap.data().slots||[]).filter(s => s !== slotId);
-          await updateDoc(appRef, { slots: newSlots });
+           const newSlots = (aSnap.data().slots||[]).filter(s => s !== slotId);
+           await updateDoc(appRef, { slots: newSlots });
         }
       }
       loadData();
@@ -147,8 +211,8 @@
 
   function updateStats() {
     document.getElementById('stat-total').textContent = allData.length;
-    document.getElementById('stat-regular').textContent = allData.filter(r => r.status === '정규').length;
-    document.getElementById('stat-waitlist').textContent = allData.filter(r => r.status !== '정규').length;
+    document.getElementById('stat-regular').textContent = allData.filter(r => r.status === '상담 확정').length;
+    document.getElementById('stat-waitlist').textContent = allData.filter(r => r.status !== '상담 확정').length;
     document.getElementById('stat-students').textContent = new Set(allData.map(r => r.uid)).size;
   }
 
@@ -161,8 +225,8 @@
     let filtered = allData.filter(r => {
       if (deskF !== 'all' && r.slotId.split('_')[0] !== deskF) return false;
       if (timeF !== 'all' && r.slotId.split('_')[1] !== timeF) return false;
-      if (typeF === 'regular' && r.status !== '정규') return false;
-      if (typeF === 'waitlist' && r.status === '정규') return false;
+      if (typeF === 'regular' && r.status !== '상담 확정') return false;
+      if (typeF === 'waitlist' && r.status === '상담 확정') return false;
       if (searchQ && !((r.name||'').toLowerCase().includes(searchQ) || (r.studentId||'').toLowerCase().includes(searchQ))) return false;
       return true;
     });
@@ -178,12 +242,12 @@
         <td>${i + 1}</td>
         <td>${DESK_NAMES[r.deskIdx]}</td>
         <td>${TIME_SLOTS[r.timeIdx]}</td>
-        <td><span class="badge ${r.status === '정규' ? 'badge-green' : 'badge-yellow'}">${r.status}</span></td>
+        <td><span class="badge ${r.status === '상담 확정' ? 'badge-green' : 'badge-yellow'}">${r.status}</span></td>
         <td>
           <select class="action-select" onchange="handleAction(this, '${r.slotId}', '${r.uid}')">
             <option value="">작업 선택</option>
-            ${r.status !== '정규' ? `<option value="promote">정규 승격</option>` : `<option value="demote">예비 강등</option>`}
-            <option value="delete">완전 삭제</option>
+            ${r.status !== '상담 확정' ? `<option value="promote">상담 확정으로 전환</option>` : `<option value="demote">예비 대기로 변경</option>`}
+            <option value="delete">신청 취소(삭제)</option>
           </select>
         </td>
         <td>${r.univ || '-'}</td>
@@ -213,29 +277,55 @@
 </script>
 
 <style>
-  :root { --bg: #0d0f14; --surface: #161922; --surface2: #1e2230; --border: #2a2f3e; --accent: #4f8ef7; --green: #22c55e; --yellow: #f59e0b; --red: #ef4444; --gray: #6b7280; --text: #e8eaf0; --text2: #9ca3af; }
+  :root { --bg: #0d0f14; --surface: #161922; --surface2: #1e2230; --border: #2a2f3e; --accent: #4f8ef7; --green: #10B981; --yellow: #F59E0B; --red: #EF4444; --gray: #6b7280; --text: #e8eaf0; --text2: #9ca3af; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Noto Sans KR', sans-serif; font-size: 13px; }
   .admin-header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 20px 28px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
   .admin-header h1 { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 2px; color: var(--accent); }
   .btn { padding: 8px 18px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-  .btn:hover { opacity: 0.85; } .btn-accent { background: var(--accent); color: #fff; } .btn-green { background: var(--green); color: #fff; }
-  .container { padding: 24px; max-width: 1400px; margin: 0 auto; }
+  .btn:hover { opacity: 0.85; } .btn-accent { background: var(--accent); color: #fff; } .btn-green { background: #22c55e; color: #fff; }
+  .container { padding: 24px; max-width: 1440px; margin: 0 auto; }
+  
+  /* 탭 네비게이션 */
+  .admin-tabs { display: flex; gap: 12px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+  .tab-btn { background: transparent; border: none; color: var(--text2); font-size: 16px; font-weight: 700; cursor: pointer; padding: 10px 20px; border-radius: 8px; font-family: inherit; transition: all 0.2s; }
+  .tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+  .tab-btn.active { color: #fff; background: var(--surface2); border-bottom: 3px solid var(--accent); border-radius: 8px 8px 0 0; }
+
+  /* 대시보드 (칸반 뷰) */
+  .dashboard-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; min-width: 1200px; overflow-x: auto; padding-bottom: 20px; }
+  .board-col { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .board-col-title { font-size: 17px; font-weight: 900; color: var(--accent); text-align: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid var(--surface2); letter-spacing: 1px; }
+  .board-slot { background: var(--surface2); border-radius: 8px; padding: 12px; margin-bottom: 14px; border: 1px solid rgba(255,255,255,0.02); }
+  .board-time { font-size: 14px; font-weight: 800; color: #fff; margin-bottom: 12px; text-align: center; background: #252a36; border-radius: 6px; padding: 6px; }
+  .board-empty { text-align: center; font-size: 12px; color: var(--gray); padding: 10px 0; font-weight: 500; }
+  .board-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 8px 10px; border-radius: 6px; background: rgba(0,0,0,0.3); font-size: 13px; }
+  .item-reg { border-left: 4px solid var(--green); }
+  .item-wait { border-left: 4px solid var(--yellow); opacity: 0.85; }
+  .item-info { display: flex; flex-direction: column; gap: 3px; }
+  .item-univ { font-size: 11px; color: var(--text2); }
+  .wait-badge { display: inline-block; font-size: 10px; background: rgba(245,158,11,0.2); color: var(--yellow); padding: 2px 6px; border-radius: 4px; font-weight: 700; width: fit-content; margin-bottom: 2px; }
+  .item-actions { display: flex; gap: 4px; }
+  .action-icon { background: var(--surface); border: 1px solid var(--border); color: var(--text2); width: 24px; height: 24px; border-radius: 4px; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .action-icon:hover { background: var(--border); color: #fff; }
+  .action-up { color: var(--green); } .action-up:hover { background: rgba(16,185,129,0.2); }
+  .action-del { color: var(--red); } .action-del:hover { background: rgba(239,68,68,0.2); }
+
+  /* 리스트 뷰 (기존 화면) */
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-bottom: 20px; }
   .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
   .stat-label { font-size: 11px; color: var(--text2); font-weight: 500; margin-bottom: 6px; }
   .stat-value { font-size: 28px; font-weight: 900; color: var(--text); }
   .filters { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
   .filters select, .filters input { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 7px 12px; border-radius: 7px; font-family: inherit; font-size: 13px; outline: none; }
-  .table-wrap { overflow-x: auto; }
+  .table-wrap-list { overflow-x: auto; }
   .admin-table { width: 100%; border-collapse: collapse; min-width: 1100px; }
   .admin-table th { background: var(--surface2); color: var(--text2); font-size: 11px; font-weight: 600; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
   .admin-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text); font-size: 13px; }
   .admin-table tbody tr:hover { background: var(--surface2); }
   .badge { display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-  .badge-green { background: rgba(34,197,94,0.2); color: var(--green); } .badge-yellow { background: rgba(245,158,11,0.2); color: var(--yellow); }
+  .badge-green { background: rgba(16,185,129,0.2); color: var(--green); } .badge-yellow { background: rgba(245,158,11,0.2); color: var(--yellow); }
   .action-select { background: transparent; color: var(--text); border: 1px solid var(--border); padding: 4px 6px; border-radius: 4px; font-size: 12px; cursor: pointer; outline:none; }
-  .action-select:hover { border-color: var(--accent); }
   .action-select option { background: var(--surface); color: var(--text); }
   .back-link { font-size: 12px; color: var(--gray); text-decoration: none; } .back-link:hover { color: var(--text2); }
 </style>
@@ -255,49 +345,63 @@
 </header>
 
 <div class="container">
-  <div class="stats">
-    <div class="stat-card"><div class="stat-label">전체 신청</div><div class="stat-value" id="stat-total">-</div></div>
-    <div class="stat-card"><div class="stat-label">정규 신청</div><div class="stat-value" id="stat-regular">-</div></div>
-    <div class="stat-card"><div class="stat-label">예비 신청</div><div class="stat-value" id="stat-waitlist">-</div></div>
-    <div class="stat-card"><div class="stat-label">신청 학생 수</div><div class="stat-value" id="stat-students">-</div></div>
+  
+  <div class="admin-tabs">
+    <button class="tab-btn active" onclick="switchAdminTab('dashboard')">📊 현장 대시보드</button>
+    <button class="tab-btn" onclick="switchAdminTab('list')">📄 전체 목록 보기</button>
   </div>
 
-  <div class="filters">
-    <span style="font-size:12px;color:var(--text2);font-weight:600;">필터:</span>
-    <select id="filter-desk"><option value="all">모든 데스크</option></select>
-    <select id="filter-time"><option value="all">모든 시간</option></select>
-    <select id="filter-type">
-      <option value="all">정규+예비</option>
-      <option value="regular">정규만</option>
-      <option value="waitlist">예비만</option>
-    </select>
-    <div style="flex-grow:1;"></div>
-    <input type="text" id="search-input" placeholder="이름 또는 학번 검색..." style="width: 200px;">
+  <div id="view-dashboard">
+    <div id="dashboard-grid" class="dashboard-grid">
+      </div>
   </div>
 
-  <div class="table-wrap">
-    <table class="admin-table">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>데스크</th>
-          <th>시간</th>
-          <th>상태</th>
-          <th>작업</th>
-          <th>대학</th>
-          <th>학번</th>
-          <th>이름</th>
-          <th>연락처</th>
-          <th>이메일</th>
-          <th>사전질문</th>
-          <th>신청시각</th>
-        </tr>
-      </thead>
-      <tbody id="admin-tbody">
-        <tr><td colspan="12" style="text-align:center;padding:40px;color:var(--gray);">데이터를 불러오는 중...</td></tr>
-      </tbody>
-    </table>
+  <div id="view-list" style="display: none;">
+    <div class="stats">
+      <div class="stat-card"><div class="stat-label">전체 신청</div><div class="stat-value" id="stat-total">-</div></div>
+      <div class="stat-card"><div class="stat-label">상담 확정</div><div class="stat-value" id="stat-regular">-</div></div>
+      <div class="stat-card"><div class="stat-label">예비 대기</div><div class="stat-value" id="stat-waitlist">-</div></div>
+      <div class="stat-card"><div class="stat-label">신청 학생 수</div><div class="stat-value" id="stat-students">-</div></div>
+    </div>
+
+    <div class="filters">
+      <span style="font-size:12px;color:var(--text2);font-weight:600;">필터:</span>
+      <select id="filter-desk"><option value="all">모든 기업</option></select>
+      <select id="filter-time"><option value="all">모든 시간</option></select>
+      <select id="filter-type">
+        <option value="all">전체보기</option>
+        <option value="regular">상담 확정만</option>
+        <option value="waitlist">예비 대기만</option>
+      </select>
+      <div style="flex-grow:1;"></div>
+      <input type="text" id="search-input" placeholder="이름 또는 학번 검색..." style="width: 200px;">
+    </div>
+
+    <div class="table-wrap-list">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>데스크</th>
+            <th>시간</th>
+            <th>상태</th>
+            <th>작업 관리</th>
+            <th>대학</th>
+            <th>학번</th>
+            <th>이름</th>
+            <th>연락처</th>
+            <th>이메일</th>
+            <th>사전질문</th>
+            <th>신청시각</th>
+          </tr>
+        </thead>
+        <tbody id="admin-tbody">
+          <tr><td colspan="12" style="text-align:center;padding:40px;color:var(--gray);">데이터를 불러오는 중...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
+
 </div>
 
 </body>
