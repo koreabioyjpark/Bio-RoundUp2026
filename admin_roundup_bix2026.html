@@ -17,8 +17,7 @@
     projectId: "bio-roundup-2026",
     storageBucket: "bio-roundup-2026.firebasestorage.app",
     messagingSenderId: "109569887388",
-    appId: "1:109569887388:web:f06ef486a6df185947b159",
-    measurementId: "G-QEFPF4QJBL"
+    appId: "1:109569887388:web:f06ef486a6df185947b159"
   };
 
   const DESK_NAMES = ["기업 1","기업 2","기업 3","기업 4","기업 5","기업 6"];
@@ -28,6 +27,7 @@
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
   let allData = [];
+  let selectedTimeIdx = 0; // 현재 선택된 시간대
 
   window.addEventListener('DOMContentLoaded', () => {
     const pw = prompt("관리자 비밀번호를 입력하세요");
@@ -35,6 +35,17 @@
       document.body.innerHTML = '<div style="text-align:center;padding:80px;color:#ef4444;font-size:20px;">접근 권한이 없습니다.</div>';
       return;
     }
+
+    // 시간대 탭 버튼 생성
+    const timeTabsEl = document.getElementById('time-tabs');
+    TIME_SLOTS.forEach((t, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'time-tab-btn' + (i === 0 ? ' active' : '');
+      btn.textContent = t;
+      btn.onclick = () => selectTime(i);
+      timeTabsEl.appendChild(btn);
+    });
+
     document.getElementById('load-btn').addEventListener('click', loadData);
     document.getElementById('csv-btn').addEventListener('click', exportCSV);
     document.getElementById('search-input').addEventListener('input', renderTable);
@@ -42,12 +53,12 @@
     loadData();
   });
 
+  // ── 데이터 로드 ──
   async function loadData() {
     const btn = document.getElementById('load-btn');
     btn.textContent = '로딩 중...';
     btn.disabled = true;
     allData = [];
-
     try {
       for (let d = 0; d < 6; d++) {
         for (let t = 0; t < 6; t++) {
@@ -61,8 +72,9 @@
         }
       }
       updateStats();
-      renderDashboard(); 
-      renderTable();     
+      renderTimeView(selectedTimeIdx);
+      renderDeskView();
+      renderTable();
     } catch (e) {
       alert('로드 실패: ' + e.message);
     } finally {
@@ -71,284 +83,463 @@
     }
   }
 
+  // ── 탭 전환 ──
   window.switchAdminTab = (tab) => {
-    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-    document.querySelector(`[onclick="switchAdminTab('${tab}')"]`).classList.add('active');
-    document.getElementById('view-dashboard').style.display = tab === 'dashboard' ? 'block' : 'none';
-    document.getElementById('view-list').style.display = tab === 'list' ? 'block' : 'none';
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    ['time-view','desk-view','list-view'].forEach(id => {
+      document.getElementById(id).style.display = 'none';
+    });
+    document.getElementById(tab + '-view').style.display = 'block';
   };
 
-  // ★ 현장 대시보드 렌더링 (이미지 레이아웃 구현) ★
-  function renderDashboard() {
-    const container = document.getElementById('dashboard-view');
+  // ══════════════════════════════════════
+  // ★ 시간대별 뷰 (신규)
+  // ══════════════════════════════════════
+  function selectTime(idx) {
+    selectedTimeIdx = idx;
+    document.querySelectorAll('.time-tab-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+    renderTimeView(idx);
+  }
+
+  function renderTimeView(timeIdx) {
+    const container = document.getElementById('time-view-content');
+    const timeLabel = TIME_SLOTS[timeIdx];
+
+    // 이 시간대의 전체 신청자 수 집계
+    const timeData = allData.filter(r => r.timeIdx === timeIdx);
+    const totalReg  = timeData.filter(r => r.status === '상담 확정').length;
+    const totalWait = timeData.filter(r => r.status.includes('예비')).length;
+
+    let html = `
+      <div class="time-summary-bar">
+        <span class="time-summary-label">🕐 ${timeLabel}</span>
+        <span class="time-summary-stat">확정 <strong>${totalReg}</strong>명 &nbsp;/&nbsp; 예비 <strong>${totalWait}</strong>명 &nbsp;/&nbsp; 총 <strong>${totalReg + totalWait}</strong>명</span>
+      </div>
+      <div class="time-desk-grid">`;
+
+    for (let d = 0; d < 6; d++) {
+      const slotId = `desk${d+1}_time${timeIdx+1}`;
+      const items = allData.filter(r => r.slotId === slotId);
+      const regs  = items.filter(r => r.status === '상담 확정');
+      const waits = items.filter(r => r.status.includes('예비'));
+      const isFull = regs.length >= 3;
+
+      html += `
+        <div class="desk-card ${isFull ? 'desk-full' : ''}">
+          <div class="desk-card-header">
+            <span class="desk-card-name">${DESK_NAMES[d]}</span>
+            <span class="desk-card-count">${regs.length}/3 확정 · 예비${waits.length}</span>
+          </div>
+
+          <div class="person-section-label confirmed-label">📋 상담 확정</div>`;
+
+      // 정규 3슬롯
+      for (let i = 0; i < 3; i++) {
+        const r = regs[i];
+        if (r) {
+          html += `
+            <div class="person-row confirmed" title="${r.univ || ''} ${r.studentId || ''}">
+              <div class="person-info">
+                <span class="person-num">${i+1}</span>
+                <div>
+                  <div class="person-name">${r.name}</div>
+                  <div class="person-detail">${r.univ || r.actualUniv || '-'} · ${r.studentId || '-'}</div>
+                </div>
+              </div>
+              <div class="person-actions">
+                <button class="action-btn btn-demote" title="예비로 변경" onclick="handleActionDirect('demote','${slotId}','${r.uid}')">↓</button>
+                <button class="action-btn btn-delete" title="삭제" onclick="handleActionDirect('delete','${slotId}','${r.uid}')">✕</button>
+              </div>
+            </div>`;
+        } else {
+          html += `<div class="person-row empty-slot"><span class="empty-text">빈 자리</span></div>`;
+        }
+      }
+
+      html += `<div class="person-section-label waitlist-label">⏳ 예비 대기</div>`;
+
+      // 예비 3슬롯
+      for (let i = 0; i < 3; i++) {
+        const w = waits[i];
+        if (w) {
+          html += `
+            <div class="person-row waitlist" title="${w.univ || ''} ${w.studentId || ''}">
+              <div class="person-info">
+                <span class="person-num wait-num">예비${w.waitNum}</span>
+                <div>
+                  <div class="person-name">${w.name}</div>
+                  <div class="person-detail">${w.univ || w.actualUniv || '-'} · ${w.studentId || '-'}</div>
+                </div>
+              </div>
+              <div class="person-actions">
+                ${regs.length < 3 ? `<button class="action-btn btn-promote" title="확정으로 승격" onclick="handleActionDirect('promote','${slotId}','${w.uid}')">↑</button>` : ''}
+                <button class="action-btn btn-delete" title="삭제" onclick="handleActionDirect('delete','${slotId}','${w.uid}')">✕</button>
+              </div>
+            </div>`;
+        } else {
+          html += `<div class="person-row empty-wait"><span class="empty-text">-</span></div>`;
+        }
+      }
+
+      // 사전 질문 미리보기 (있을 경우)
+      const withQ = [...regs, ...waits].filter(r => r.preQuestion && r.preQuestion.trim());
+      if (withQ.length > 0) {
+        html += `<div class="preq-section">`;
+        withQ.forEach(r => {
+          html += `<div class="preq-row"><span class="preq-name">${r.name}:</span> <span class="preq-text">${r.preQuestion}</span></div>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `</div>`; // desk-card 닫기
+    }
+
+    html += `</div>`; // time-desk-grid 닫기
+    container.innerHTML = html;
+  }
+
+  // ══════════════════════════════════════
+  // ★ 기업별 뷰 (기존 대시보드 개선)
+  // ══════════════════════════════════════
+  function renderDeskView() {
+    const container = document.getElementById('desk-view-content');
     let html = '';
-    
+
     for (let d = 0; d < 6; d++) {
       const boothItems = allData.filter(r => r.deskIdx === d);
-      const totalReg = boothItems.filter(r => r.status === '상담 확정').length;
+      const totalReg  = boothItems.filter(r => r.status === '상담 확정').length;
       const totalWait = boothItems.filter(r => r.status.includes('예비')).length;
 
-      // 기업 섹션 시작 (헤더 + 통계)
       html += `
         <div class="booth-section">
           <div class="booth-header">
             <div class="booth-title">${DESK_NAMES[d]}</div>
-            <div class="booth-stats">총 신청자: <strong>${totalReg}</strong> / 예비: <strong>${totalWait}</strong></div>
+            <div class="booth-stats">확정 <strong>${totalReg}</strong>명 · 예비 <strong>${totalWait}</strong>명</div>
           </div>
           <div class="booth-time-grid">`;
 
       for (let t = 0; t < 6; t++) {
         const slotId = `desk${d+1}_time${t+1}`;
         const items = allData.filter(r => r.slotId === slotId);
-        const regs = items.filter(r => r.status === '상담 확정');
+        const regs  = items.filter(r => r.status === '상담 확정');
         const waits = items.filter(r => r.status.includes('예비'));
 
         html += `<div class="time-box">
-                  <div class="time-label">${TIME_SLOTS[t]}</div>
-                  <div class="applicant-area">`;
-        
-        // 정규 확정자 3칸 (데이터 없으면 빈칸 처리)
+          <div class="time-label">${TIME_SLOTS[t]}</div>
+          <div class="applicant-area">`;
+
         for (let i = 0; i < 3; i++) {
           const r = regs[i];
           if (r) {
-            html += `<div class="slot-row row-reg" title="${r.univ} ${r.studentId}">
-                      <span class="row-name">${r.name}</span>
-                      <div class="row-btns">
-                        <button onclick="handleActionDirect('demote','${slotId}','${r.uid}')">⬇</button>
-                        <button onclick="handleActionDirect('delete','${slotId}','${r.uid}')">✕</button>
-                      </div>
-                    </div>`;
+            html += `<div class="slot-row row-reg" title="${r.univ||''} ${r.studentId||''}">
+              <span class="row-name">${r.name}</span>
+              <div class="row-btns">
+                <button title="예비로" onclick="handleActionDirect('demote','${slotId}','${r.uid}')">↓</button>
+                <button title="삭제" onclick="handleActionDirect('delete','${slotId}','${r.uid}')">✕</button>
+              </div></div>`;
           } else {
-            html += `<div class="slot-row row-empty">비어있음</div>`;
+            html += `<div class="slot-row row-empty">빈 자리</div>`;
           }
         }
-
-        // 예비 대기자 3칸 (데이터 없으면 빈칸 처리)
         for (let i = 0; i < 3; i++) {
           const w = waits[i];
           if (w) {
-            html += `<div class="slot-row row-wait" title="${w.univ} ${w.studentId}">
-                      <span class="row-name">예비${w.waitNum}. ${w.name}</span>
-                      <div class="row-btns">
-                        ${regs.length < 3 ? `<button onclick="handleActionDirect('promote','${slotId}','${w.uid}')">⬆</button>` : ''}
-                        <button onclick="handleActionDirect('delete','${slotId}','${w.uid}')">✕</button>
-                      </div>
-                    </div>`;
+            html += `<div class="slot-row row-wait" title="${w.univ||''} ${w.studentId||''}">
+              <span class="row-name">예비${w.waitNum}. ${w.name}</span>
+              <div class="row-btns">
+                ${regs.length < 3 ? `<button title="확정으로" onclick="handleActionDirect('promote','${slotId}','${w.uid}')">↑</button>` : ''}
+                <button title="삭제" onclick="handleActionDirect('delete','${slotId}','${w.uid}')">✕</button>
+              </div></div>`;
           } else {
             html += `<div class="slot-row row-empty-wait">-</div>`;
           }
         }
-
-        html += `</div></div>`; // time-box 닫기
+        html += `</div></div>`;
       }
-      html += `</div></div>`; // booth-section 닫기
+      html += `</div></div>`;
     }
     container.innerHTML = html;
   }
 
+  // ── 액션 처리 (승격/강등/삭제) ──
   window.handleActionDirect = async (action, slotId, uid) => {
-    const mockSelectEl = { value: action };
-    await handleAction(mockSelectEl, slotId, uid);
+    await handleAction({ value: action }, slotId, uid);
   };
 
   window.handleAction = async (selectEl, slotId, uid) => {
     const action = selectEl.value;
-    if (selectEl.tagName === 'SELECT') selectEl.value = ""; 
+    if (selectEl.tagName === 'SELECT') selectEl.value = "";
     if (!action) return;
 
+    const confirmMsg = { promote: '예비 → 상담 확정으로 승격하시겠습니까?', demote: '상담 확정 → 예비로 변경하시겠습니까?', delete: '이 신청을 삭제하시겠습니까? 되돌릴 수 없습니다.' };
+    if (!confirm(confirmMsg[action] || '진행하시겠습니까?')) return;
+
     const slotRef = doc(db, "slots", slotId);
-    const appRef = doc(db, "applicants", uid);
+    const appRef  = doc(db, "applicants", uid);
 
     try {
       await runTransaction(db, async (t) => {
         const snap = await t.get(slotRef);
-        if(!snap.exists()) return;
+        if (!snap.exists()) return;
         const data = snap.data();
-        let regs = data.registrations || [];
-        let waits = data.waitlist || [];
+        let regs  = [...(data.registrations || [])];
+        let waits = [...(data.waitlist || [])];
         const student = regs.find(r => r.uid === uid) || waits.find(r => r.uid === uid);
-        if(!student) throw new Error("학생 정보를 찾을 수 없습니다.");
+        if (!student) throw new Error("학생 정보를 찾을 수 없습니다.");
 
-        const [dIdx, tIdx] = slotId.replace('desk', '').replace('_time', ',').split(',').map(x => Number(x) - 1);
-        const boothInfo = `[${DESK_NAMES[dIdx]} / ${TIME_SLOTS[tIdx]}]`;
-        let msg = ""; 
-
-        if (action === 'delete') {
-          if(!confirm(`[${student.name}] 학생의 신청을 취소하시겠습니까?`)) throw new Error("CANCEL");
-          regs = regs.filter(r => r.uid !== uid);
+        if (action === 'promote') {
+          if (regs.length >= 3) throw new Error("CANCEL");
           waits = waits.filter(r => r.uid !== uid);
-          msg = `안내드립니다. 신청하신 ${boothInfo} 상담이 관리자에 의해 취소되었습니다. 자세한 사항은 사무국으로 문의 부탁드립니다.`;
-        } else if (action === 'promote') {
-          if(!confirm(`[${student.name}] 학생을 상담 확정 상태로 변경하시겠습니까?`)) throw new Error("CANCEL");
-          if(regs.length >= 3) throw new Error("정원 초과");
-          waits = waits.filter(r => r.uid !== uid);
-          regs.push({ ...student, waitNum: null });
-          msg = `안내드립니다. 신청하신 ${boothInfo} 상담이 "상담 확정" 상태로 변경되었습니다. 예약된 시간에 맞춰 참여 부탁드립니다.`;
+          regs.push({ ...student, waitNum: undefined });
         } else if (action === 'demote') {
-          if(!confirm(`[${student.name}] 학생을 예비 대기 상태로 변경하시겠습니까?`)) throw new Error("CANCEL");
           regs = regs.filter(r => r.uid !== uid);
-          waits.push({ ...student });
-          msg = `안내드립니다. 신청하신 ${boothInfo} 상담이 "예비 대기" 상태로 변경되었습니다. 취소자 발생 시 순번에 따라 상태 변경 후 개별 안내드릴 예정입니다.`;
+          waits.push({ ...student, waitNum: waits.length + 1 });
+        } else if (action === 'delete') {
+          regs  = regs.filter(r => r.uid !== uid);
+          waits = waits.filter(r => r.uid !== uid);
         }
 
-        waits = waits.map((item, idx) => ({...item, waitNum: idx + 1}));
+        waits = waits.map((item, idx) => ({ ...item, waitNum: idx + 1 }));
         t.update(slotRef, { registrations: regs, waitlist: waits });
-        if (msg) t.update(appRef, { adminNotification: msg });
       });
 
       if (action === 'delete') {
         const aSnap = await getDoc(appRef);
-        if(aSnap.exists()) {
-           const newSlots = (aSnap.data().slots||[]).filter(s => s !== slotId);
-           await updateDoc(appRef, { slots: newSlots });
+        if (aSnap.exists()) {
+          await updateDoc(appRef, { slots: (aSnap.data().slots || []).filter(s => s !== slotId) });
         }
       }
       loadData();
-    } catch(e) {
-      if(e.message !== "CANCEL") alert("실패: " + e.message);
+    } catch (e) {
+      if (e.message !== 'CANCEL') alert('실패: ' + e.message);
     }
   };
 
+  // ── 통계 ──
   function updateStats() {
-    document.getElementById('stat-total').textContent = allData.length;
-    document.getElementById('stat-regular').textContent = allData.filter(r => r.status === '상담 확정').length;
+    document.getElementById('stat-total').textContent    = allData.length;
+    document.getElementById('stat-regular').textContent  = allData.filter(r => r.status === '상담 확정').length;
     document.getElementById('stat-waitlist').textContent = allData.filter(r => r.status.includes('예비')).length;
   }
 
+  // ── 전체 명단 테이블 ──
   function renderTable() {
-    const searchQ = document.getElementById('search-input').value.toLowerCase();
-    let filtered = allData.filter(r => searchQ ? ((r.name||'').toLowerCase().includes(searchQ) || (r.studentId||'').toLowerCase().includes(searchQ)) : true);
+    const q = document.getElementById('search-input').value.toLowerCase();
+    const filtered = allData.filter(r => !q || (r.name||'').toLowerCase().includes(q) || (r.studentId||'').toLowerCase().includes(q) || (r.univ||'').toLowerCase().includes(q));
 
-    const tbody = document.getElementById('admin-tbody');
-    tbody.innerHTML = filtered.map((r, i) => `
+    document.getElementById('admin-tbody').innerHTML = filtered.map((r, i) => `
       <tr>
-        <td>${i + 1}</td>
+        <td>${i+1}</td>
         <td>${DESK_NAMES[r.deskIdx]}</td>
         <td>${TIME_SLOTS[r.timeIdx]}</td>
         <td><span class="badge ${r.status === '상담 확정' ? 'badge-green' : 'badge-yellow'}">${r.status}</span></td>
         <td>
-          <select class="action-select" onchange="handleAction(this, '${r.slotId}', '${r.uid}')">
-            <option value="">작업 선택</option>
-            ${r.status !== '상담 확정' ? `<option value="promote">상담 확정으로 전환</option>` : `<option value="demote">예비 대기로 변경</option>`}
-            <option value="delete">신청 취소(삭제)</option>
+          <select class="action-select" onchange="handleAction(this,'${r.slotId}','${r.uid}')">
+            <option value="">작업</option>
+            ${r.status !== '상담 확정' ? `<option value="promote">↑ 확정 전환</option>` : `<option value="demote">↓ 예비 변경</option>`}
+            <option value="delete">✕ 삭제</option>
           </select>
         </td>
-        <td>${r.univ || '-'}</td>
+        <td>${r.univ || r.actualUniv || '-'}</td>
         <td>${r.studentId || '-'}</td>
         <td>${r.name || '-'}</td>
         <td>${r.phone || '-'}</td>
-        <td title="${r.preQuestion || ''}">${r.preQuestion ? (r.preQuestion.slice(0,10) + '...') : '-'}</td>
+        <td class="preq-cell" title="${r.preQuestion||''}">${r.preQuestion ? r.preQuestion.slice(0,15)+'…' : '-'}</td>
         <td>${r.appliedAt ? r.appliedAt.slice(5,16).replace('T',' ') : '-'}</td>
-      </tr>
-    `).join('');
+      </tr>`).join('');
   }
 
+  // ── CSV 내보내기 ──
   function exportCSV() {
-    if (allData.length === 0) return;
-    const headers = ['번호','데스크','시간','상태','대학','학번','이름','연락처','사전질문','신청시각'];
-    const rows = allData.map((r, i) => [i+1, DESK_NAMES[r.deskIdx], TIME_SLOTS[r.timeIdx], r.status, r.univ||'', r.studentId||'', r.name||'', r.phone||'', (r.preQuestion||'').replace(/"/g, '""'), r.appliedAt||'']);
-    const csv = '\uFEFF' + [headers, ...rows].map(row => row.map(v => `"${v}"`).join(',')).join('\n');
+    if (allData.length === 0) { alert('데이터가 없습니다.'); return; }
+    const headers = ['번호','기업','시간','상태','대학','학번','성명','연락처','사전질문','신청시각'];
+    const rows = allData.map((r,i) => [i+1, DESK_NAMES[r.deskIdx], TIME_SLOTS[r.timeIdx], r.status, r.univ||r.actualUniv||'', r.studentId||'', r.name||'', r.phone||'', (r.preQuestion||'').replace(/"/g,'""'), r.appliedAt||'']);
+    const csv = '\uFEFF' + [headers,...rows].map(row => row.map(v=>`"${v}"`).join(',')).join('\n');
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-    a.download = `roundup_신청목록.csv`;
+    a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
+    a.download = `roundup_신청목록_${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
   }
 </script>
 
 <style>
-  :root { --bg: #f0f2f5; --surface: #ffffff; --border: #d1d5db; --accent: #2a5c9e; --green: #10B981; --yellow: #D97706; --red: #EF4444; --text: #1f2937; --text-light: #6b7280; }
+  :root {
+    --bg: #f0f2f5;
+    --surface: #ffffff;
+    --border: #d1d5db;
+    --accent: #2a5c9e;
+    --green: #10B981;
+    --yellow: #D97706;
+    --red: #EF4444;
+    --text: #1f2937;
+    --text-light: #6b7280;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Noto Sans KR', sans-serif; }
-  
-  .admin-header { background: #1a1c23; color: #fff; padding: 15px 30px; display: flex; align-items: center; justify-content: space-between; position: sticky; top:0; z-index:100; }
-  .admin-header h1 { font-family: 'Bebas Neue', sans-serif; font-size: 24px; letter-spacing: 2px; }
-  .btn { padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; transition: 0.2s; }
+
+  /* ── 헤더 ── */
+  .admin-header { background: #1a1c23; color: #fff; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; gap: 12px; flex-wrap: wrap; }
+  .admin-header h1 { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 2px; }
+  .btn { padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; transition: 0.2s; }
+  .btn:hover { opacity: 0.85; }
   .btn-accent { background: var(--accent); color: #fff; }
-  .btn-green { background: var(--green); color: #fff; }
+  .btn-green  { background: var(--green);  color: #fff; }
 
   .container { padding: 20px; max-width: 1600px; margin: 0 auto; }
 
-  /* 탭 */
-  .admin-tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
-  .tab-btn { padding: 12px 24px; border: none; background: none; font-size: 16px; font-weight: 700; color: var(--text-light); cursor: pointer; border-radius: 8px 8px 0 0; }
-  .tab-btn.active { background: var(--surface); color: var(--accent); border-bottom: 4px solid var(--accent); }
+  /* ── 상단 탭 ── */
+  .admin-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
+  .tab-btn { padding: 12px 22px; border: none; background: none; font-size: 15px; font-weight: 700; color: var(--text-light); cursor: pointer; border-radius: 8px 8px 0 0; font-family: inherit; }
+  .tab-btn.active { background: var(--surface); color: var(--accent); border-bottom: 3px solid var(--accent); margin-bottom: -2px; }
 
-  /* ★ 현장 대시보드 (보내주신 이미지 레이아웃 구현) ★ */
-  .dashboard-grid { display: flex; flex-direction: column; gap: 30px; }
-  .booth-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-  .booth-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 2px solid #f0f2f5; padding-bottom: 15px; }
-  .booth-title { font-size: 22px; font-weight: 900; color: var(--accent); }
-  .booth-stats { font-size: 14px; color: var(--text-light); }
-  
-  .booth-time-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; } /* 3열 2행 구조 */
+  /* ════════════════════════════════
+     ★ 시간대별 뷰
+  ════════════════════════════════ */
+  .time-tabs-wrap { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .time-tab-btn { padding: 10px 18px; border: 2px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 14px; font-weight: 700; color: var(--text-light); cursor: pointer; font-family: inherit; transition: all 0.2s; }
+  .time-tab-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .time-tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  .time-summary-bar { display: flex; align-items: center; justify-content: space-between; background: var(--accent); color: #fff; border-radius: 10px; padding: 14px 20px; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+  .time-summary-label { font-size: 18px; font-weight: 900; letter-spacing: 0.5px; }
+  .time-summary-stat { font-size: 14px; opacity: 0.9; }
+  .time-summary-stat strong { font-size: 18px; }
+
+  /* 기업 카드 6개 그리드 */
+  .time-desk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 1100px) { .time-desk-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 700px)  { .time-desk-grid { grid-template-columns: 1fr; } }
+
+  .desk-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+  .desk-card.desk-full { border-color: #10B981; }
+  .desk-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  .desk-card-name { font-size: 17px; font-weight: 900; color: var(--accent); }
+  .desk-card-count { font-size: 12px; color: var(--text-light); font-weight: 600; }
+
+  .person-section-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 4px; display: inline-block; margin: 8px 0 6px; }
+  .confirmed-label { background: #E1F0E8; color: var(--green); }
+  .waitlist-label  { background: #FFFBEB; color: var(--yellow); }
+
+  .person-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 8px; margin-bottom: 4px; min-height: 48px; }
+  .person-row.confirmed { background: #F0FDF4; border: 1px solid #BBF7D0; }
+  .person-row.waitlist  { background: #FFFBEB; border: 1px solid #FDE68A; }
+  .person-row.empty-slot { background: #F9FAFB; border: 1px dashed #D1D5DB; justify-content: center; min-height: 40px; }
+  .person-row.empty-wait { background: transparent; border: 1px dashed #E5E7EB; justify-content: center; min-height: 32px; }
+  .empty-text { font-size: 12px; color: #D1D5DB; }
+
+  .person-info { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .person-num { width: 22px; height: 22px; border-radius: 50%; background: var(--green); color: #fff; font-size: 11px; font-weight: 900; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .wait-num { background: var(--yellow); font-size: 9px; width: 28px; border-radius: 10px; }
+  .person-name { font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.2; }
+  .person-detail { font-size: 11px; color: var(--text-light); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+
+  .person-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .action-btn { width: 26px; height: 26px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: 0.15s; }
+  .btn-promote { background: #DCFCE7; color: var(--green); }
+  .btn-promote:hover { background: var(--green); color: #fff; }
+  .btn-demote  { background: #FEF9C3; color: var(--yellow); }
+  .btn-demote:hover  { background: var(--yellow); color: #fff; }
+  .btn-delete  { background: #FEE2E2; color: var(--red); }
+  .btn-delete:hover  { background: var(--red); color: #fff; }
+
+  /* 사전 질문 미리보기 */
+  .preq-section { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+  .preq-row { font-size: 11px; color: var(--text-light); margin-bottom: 4px; line-height: 1.5; }
+  .preq-name { font-weight: 700; color: var(--text); }
+  .preq-text { color: var(--text-light); }
+
+  /* ════════════════════════════════
+     기업별 뷰 (기존)
+  ════════════════════════════════ */
+  .dashboard-grid { display: flex; flex-direction: column; gap: 24px; }
+  .booth-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .booth-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid #f0f2f5; }
+  .booth-title { font-size: 20px; font-weight: 900; color: var(--accent); }
+  .booth-stats { font-size: 13px; color: var(--text-light); }
+  .booth-time-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
   .time-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }
-  .time-label { background: #475569; color: #fff; font-size: 12px; font-weight: 800; padding: 5px; border-radius: 5px; text-align: center; margin-bottom: 10px; }
-  
-  .applicant-area { display: flex; flex-direction: column; gap: 4px; }
-  .slot-row { height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 12px; font-weight: 700; transition: 0.2s; }
-  .row-reg { background: #E1F0E8; color: var(--green); border: 1px solid #10B981; }
+  .time-label { background: #475569; color: #fff; font-size: 11px; font-weight: 800; padding: 5px; border-radius: 5px; text-align: center; margin-bottom: 8px; }
+  .applicant-area { display: flex; flex-direction: column; gap: 3px; }
+  .slot-row { height: 30px; border-radius: 5px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px; font-size: 12px; font-weight: 700; }
+  .row-reg { background: #E1F0E8; color: var(--green); border: 1px solid #A7F3D0; }
   .row-wait { background: #FFFBEB; color: var(--yellow); border: 1px solid #FDE68A; }
-  .row-empty { background: #f3f4f6; color: #9ca3af; border: 1px dotted #d1d5db; font-weight: normal; }
-  .row-empty-wait { background: transparent; color: #e5e7eb; border: 1px dashed #e5e7eb; font-weight: normal; text-align: center; justify-content: center; }
-  
-  .row-btns { display: flex; gap: 4px; }
-  .row-btns button { background: #fff; border: 1px solid rgba(0,0,0,0.1); width: 20px; height: 20px; border-radius: 4px; cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center; }
+  .row-empty { background: #f3f4f6; color: #9ca3af; border: 1px dotted #d1d5db; font-weight: 400; font-size: 11px; }
+  .row-empty-wait { background: transparent; color: #e5e7eb; border: 1px dashed #e5e7eb; font-weight: 400; justify-content: center; font-size: 11px; }
+  .row-btns { display: flex; gap: 3px; }
+  .row-btns button { background: #fff; border: 1px solid rgba(0,0,0,0.1); width: 20px; height: 20px; border-radius: 4px; cursor: pointer; font-size: 11px; display: flex; align-items: center; justify-content: center; }
   .row-btns button:hover { background: #f0f0f0; }
+  .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80px; }
 
-  /* 리스트 뷰 */
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; }
-  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
+  /* ════════════════════════════════
+     전체 명단 뷰
+  ════════════════════════════════ */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; text-align: center; }
   .stat-value { font-size: 28px; font-weight: 900; color: var(--accent); }
-  .filters { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-bottom: 15px; display: flex; gap: 10px; align-items: center; }
-  .filters input { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; flex-grow: 1; }
-  .admin-table { width: 100%; border-collapse: collapse; background: #fff; font-size: 13px; }
-  .admin-table th { background: #f9fafb; padding: 12px; text-align: left; border-bottom: 2px solid #eee; }
-  .admin-table td { padding: 12px; border-bottom: 1px solid #eee; }
-  .badge { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 800; }
-  .badge-green { background: #E1F0E8; color: var(--green); }
+  .stat-label { font-size: 12px; color: var(--text-light); margin-bottom: 4px; }
+  .filters { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; display: flex; gap: 10px; align-items: center; }
+  .filters input { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; flex-grow: 1; font-family: inherit; font-size: 14px; }
+  .table-wrap { overflow-x: auto; background: #fff; border-radius: 12px; border: 1px solid var(--border); }
+  .admin-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 900px; }
+  .admin-table th { background: #f9fafb; padding: 11px 12px; text-align: left; border-bottom: 2px solid #eee; font-size: 12px; white-space: nowrap; }
+  .admin-table td { padding: 11px 12px; border-bottom: 1px solid #f3f4f6; }
+  .admin-table tbody tr:hover { background: #f9fafb; }
+  .badge { padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 800; }
+  .badge-green  { background: #E1F0E8; color: var(--green); }
   .badge-yellow { background: #FFFBEB; color: var(--yellow); }
+  .action-select { padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px; font-size: 12px; font-family: inherit; cursor: pointer; }
+  .preq-cell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-light); font-size: 12px; cursor: default; }
 </style>
 </head>
 <body>
 
 <header class="admin-header">
-  <div style="display:flex;align-items:center;gap:15px;">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
     <h1>ROUNDUP ADMIN</h1>
-    <button class="btn btn-accent" id="load-btn">데이터 새로고침</button>
+    <button class="btn btn-accent" id="load-btn">🔄 새로고침</button>
   </div>
-  <div style="display:flex;gap:10px;">
-    <button class="btn btn-green" id="csv-btn">CSV 다운로드</button>
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-green" id="csv-btn">📥 CSV 다운로드</button>
   </div>
 </header>
 
 <div class="container">
-  
+
+  <!-- 상단 탭 3개 -->
   <div class="admin-tabs">
-    <button class="tab-btn active" onclick="switchAdminTab('dashboard')">📊 현장 대시보드</button>
-    <button class="tab-btn" onclick="switchAdminTab('list')">📄 전체 명단 보기</button>
+    <button class="tab-btn active" data-tab="time" onclick="switchAdminTab('time')">🕐 시간대별 보기</button>
+    <button class="tab-btn" data-tab="desk" onclick="switchAdminTab('desk')">🏢 기업별 보기</button>
+    <button class="tab-btn" data-tab="list" onclick="switchAdminTab('list')">📄 전체 명단</button>
   </div>
 
-  <div id="view-dashboard">
-    <div id="dashboard-view" class="dashboard-grid">
-      </div>
+  <!-- ★ 시간대별 뷰 ★ -->
+  <div id="time-view">
+    <div class="time-tabs-wrap" id="time-tabs"></div>
+    <div id="time-view-content"></div>
   </div>
 
-  <div id="view-list" style="display: none;">
+  <!-- 기업별 뷰 -->
+  <div id="desk-view" style="display:none;">
+    <div id="desk-view-content" class="dashboard-grid"></div>
+  </div>
+
+  <!-- 전체 명단 뷰 -->
+  <div id="list-view" style="display:none;">
     <div class="stats">
-      <div class="stat-card"><div style="font-size:12px; color:var(--text-light);">전체 신청 건수</div><div class="stat-value" id="stat-total">-</div></div>
-      <div class="stat-card"><div style="font-size:12px; color:var(--text-light);">상담 확정 인원</div><div class="stat-value" id="stat-regular" style="color:var(--green);">-</div></div>
-      <div class="stat-card"><div style="font-size:12px; color:var(--text-light);">예비 대기 인원</div><div class="stat-value" id="stat-waitlist" style="color:var(--yellow);">-</div></div>
+      <div class="stat-card"><div class="stat-label">전체 신청 건수</div><div class="stat-value" id="stat-total">-</div></div>
+      <div class="stat-card"><div class="stat-label">상담 확정</div><div class="stat-value" id="stat-regular" style="color:var(--green);">-</div></div>
+      <div class="stat-card"><div class="stat-label">예비 대기</div><div class="stat-value" id="stat-waitlist" style="color:var(--yellow);">-</div></div>
     </div>
-
     <div class="filters">
-      <input type="text" id="search-input" placeholder="이름 또는 학번으로 빠른 검색...">
+      <input type="text" id="search-input" placeholder="이름 · 학번 · 대학으로 검색...">
     </div>
-
-    <div style="overflow-x: auto; background: #fff; border-radius: 12px; border: 1px solid var(--border);">
+    <div class="table-wrap">
       <table class="admin-table">
         <thead>
           <tr>
-            <th>#</th><th>기업</th><th>시간</th><th>상태</th><th>작업</th><th>대학</th><th>학번</th><th>성명</th><th>연락처</th><th>사전질문</th><th>시각</th>
+            <th>#</th><th>기업</th><th>시간</th><th>상태</th><th>작업</th>
+            <th>대학</th><th>학번</th><th>성명</th><th>연락처</th><th>사전질문</th><th>신청시각</th>
           </tr>
         </thead>
         <tbody id="admin-tbody"></tbody>
@@ -357,6 +548,5 @@
   </div>
 
 </div>
-
 </body>
 </html>
