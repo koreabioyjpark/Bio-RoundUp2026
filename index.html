@@ -105,7 +105,34 @@
     
     // 기본으로 부스 신청 탭 열기
     switchNav('apply'); 
+
+    // ★ 관리자 알림 감시 및 전용 모달창 호출 로직 ★
+    onSnapshot(doc(db, "applicants", currentUser.uid), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.adminNotification) {
+          // 커스텀 모달창 띄우기
+          showNotificationModal(data.adminNotification);
+          
+          // 알림을 확인했으므로 DB에서 메시지 지우기 (반복 팝업 방지)
+          updateDoc(doc(db, "applicants", currentUser.uid), {
+            adminNotification: ""
+          });
+        }
+      }
+    });
   }
+
+  // ★ 알림 모달창 제어 함수 추가 ★
+  window.showNotificationModal = (msg) => {
+    document.getElementById('noti-message').innerText = msg;
+    document.getElementById('noti-modal').style.display = 'flex';
+  };
+  window.closeNotificationModal = () => {
+    document.getElementById('noti-modal').style.display = 'none';
+    // 모달창 닫은 후 최신 내역을 보여주기 위해 마이페이지로 이동
+    switchNav('mypage');
+  };
 
   // ★ 네비게이션(유저바) 전환 로직 ★
   window.switchNav = (tab) => {
@@ -805,6 +832,16 @@
     <button id="modal-close">✕</button>
     <div class="modal-title">✅ 신청 완료</div>
     <div id="result-body"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="noti-modal" style="display: none; z-index: 9999;">
+  <div class="modal-box" style="text-align: center; max-width: 380px; padding: 32px 24px;">
+    <div style="font-size: 44px; margin-bottom: 12px;">🔔</div>
+    <div class="modal-title" style="margin-bottom: 12px; font-size: 20px; color: var(--text-main);">상태 변경 안내</div>
+    <div id="noti-message" style="font-size: 15px; color: var(--text-sub); line-height: 1.6; margin-bottom: 28px; word-break: keep-all;">
+      </div>
+    <button onclick="window.closeNotificationModal()" style="width: 100%; background: var(--kbio-blue); color: #fff; border: none; border-radius: 8px; padding: 14px; font-size: 16px; font-weight: 700; cursor: pointer; transition: all 0.2s;">확인했습니다</button>
   </div>
 </div>
 
