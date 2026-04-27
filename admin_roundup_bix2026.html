@@ -28,7 +28,7 @@
   const db = getFirestore(app);
   let allData = [];
   let selectedTimeIdx = 0; 
-  let selectedDeskIdx = 0; // 기업별 보기 탭 상태
+  let selectedDeskIdx = 0;
 
   window.addEventListener('DOMContentLoaded', () => {
     const pw = prompt("관리자 비밀번호를 입력하세요");
@@ -37,7 +37,6 @@
       return;
     }
 
-    // 시간대 탭 세팅
     const timeTabsEl = document.getElementById('time-tabs');
     TIME_SLOTS.forEach((t, i) => {
       const btn = document.createElement('button');
@@ -47,7 +46,6 @@
       timeTabsEl.appendChild(btn);
     });
 
-    // 기업 탭 세팅 (신규)
     const deskTabsEl = document.getElementById('desk-tabs');
     DESK_NAMES.forEach((d, i) => {
       const btn = document.createElement('button');
@@ -144,12 +142,12 @@
         const r = regs[i];
         if (r) {
           html += `
-            <div class="person-row confirmed" title="${r.univ || r.actualUniv || ''} ${r.studentId || ''}">
+            <div class="person-row confirmed" title="${r.univ || r.actualUniv || ''} ${r.major || ''} ${r.grade || ''} ${r.studentId || ''}">
               <div class="person-info">
                 <span class="person-num">${i+1}</span>
                 <div>
                   <div class="person-name">${r.name}</div>
-                  <div class="person-detail">${r.univ || r.actualUniv || '-'} · ${r.studentId || '-'}</div>
+                  <div class="person-detail">${r.univ || r.actualUniv || '-'} ${r.major ? '· '+r.major : ''} ${r.grade ? r.grade : ''} · ${r.studentId || '-'}</div>
                 </div>
               </div>
               <div class="person-actions">
@@ -168,12 +166,12 @@
         const w = waits[i];
         if (w) {
           html += `
-            <div class="person-row waitlist" title="${w.univ || w.actualUniv || ''} ${w.studentId || ''}">
+            <div class="person-row waitlist" title="${w.univ || w.actualUniv || ''} ${w.major || ''} ${w.grade || ''} ${w.studentId || ''}">
               <div class="person-info">
                 <span class="person-num wait-num">예비${w.waitNum}</span>
                 <div>
                   <div class="person-name">${w.name}</div>
-                  <div class="person-detail">${w.univ || w.actualUniv || '-'} · ${w.studentId || '-'}</div>
+                  <div class="person-detail">${w.univ || w.actualUniv || '-'} ${w.major ? '· '+w.major : ''} ${w.grade ? w.grade : ''} · ${w.studentId || '-'}</div>
                 </div>
               </div>
               <div class="person-actions">
@@ -242,12 +240,12 @@
         const r = regs[i];
         if (r) {
           html += `
-            <div class="person-row confirmed" title="${r.univ || r.actualUniv || ''} ${r.studentId || ''}">
+            <div class="person-row confirmed" title="${r.univ || r.actualUniv || ''} ${r.major || ''} ${r.grade || ''} ${r.studentId || ''}">
               <div class="person-info">
                 <span class="person-num">${i+1}</span>
                 <div>
                   <div class="person-name">${r.name}</div>
-                  <div class="person-detail">${r.univ || r.actualUniv || '-'} · ${r.studentId || '-'}</div>
+                  <div class="person-detail">${r.univ || r.actualUniv || '-'} ${r.major ? '· '+r.major : ''} ${r.grade ? r.grade : ''} · ${r.studentId || '-'}</div>
                 </div>
               </div>
               <div class="person-actions">
@@ -266,12 +264,12 @@
         const w = waits[i];
         if (w) {
           html += `
-            <div class="person-row waitlist" title="${w.univ || w.actualUniv || ''} ${w.studentId || ''}">
+            <div class="person-row waitlist" title="${w.univ || w.actualUniv || ''} ${w.major || ''} ${w.grade || ''} ${w.studentId || ''}">
               <div class="person-info">
                 <span class="person-num wait-num">예비${w.waitNum}</span>
                 <div>
                   <div class="person-name">${w.name}</div>
-                  <div class="person-detail">${w.univ || w.actualUniv || '-'} · ${w.studentId || '-'}</div>
+                  <div class="person-detail">${w.univ || w.actualUniv || '-'} ${w.major ? '· '+w.major : ''} ${w.grade ? w.grade : ''} · ${w.studentId || '-'}</div>
                 </div>
               </div>
               <div class="person-actions">
@@ -324,13 +322,11 @@
         const student = regs.find(r => r.uid === uid) || waits.find(r => r.uid === uid);
         if (!student) throw new Error("학생 정보를 찾을 수 없습니다.");
 
-        // 원본 훼손을 막고 undefined 에러를 방지하는 얕은 복사
         const studentObj = { ...student };
 
         if (action === 'promote') {
           if (regs.length >= 3) throw new Error("CANCEL");
           waits = waits.filter(r => r.uid !== uid);
-          // ★ Firebase 에러 원인(undefined)을 근본적으로 제거하는 방법 ★
           delete studentObj.waitNum; 
           regs.push(studentObj);
         } else if (action === 'demote') {
@@ -341,7 +337,6 @@
           waits = waits.filter(r => r.uid !== uid);
         }
 
-        // 예비번호 재정렬
         waits = waits.map((item, idx) => {
           item.waitNum = idx + 1;
           return item;
@@ -362,7 +357,7 @@
     }
   };
 
-  // ── 통계 및 테이블 (기존 동일) ──
+  // ── 통계 및 테이블 ──
   function updateStats() {
     document.getElementById('stat-total').textContent    = allData.length;
     document.getElementById('stat-regular').textContent  = allData.filter(r => r.status === '상담 확정').length;
@@ -371,7 +366,7 @@
 
   function renderTable() {
     const q = document.getElementById('search-input').value.toLowerCase();
-    const filtered = allData.filter(r => !q || (r.name||'').toLowerCase().includes(q) || (r.studentId||'').toLowerCase().includes(q) || (r.univ||'').toLowerCase().includes(q));
+    const filtered = allData.filter(r => !q || (r.name||'').toLowerCase().includes(q) || (r.studentId||'').toLowerCase().includes(q) || (r.univ||'').toLowerCase().includes(q) || (r.major||'').toLowerCase().includes(q));
 
     document.getElementById('admin-tbody').innerHTML = filtered.map((r, i) => `
       <tr>
@@ -387,6 +382,8 @@
           </select>
         </td>
         <td>${r.univ || r.actualUniv || '-'}</td>
+        <td>${r.major || '-'}</td>
+        <td>${r.grade || '-'}</td>
         <td>${r.studentId || '-'}</td>
         <td>${r.name || '-'}</td>
         <td>${r.phone || '-'}</td>
@@ -397,8 +394,9 @@
 
   function exportCSV() {
     if (allData.length === 0) { alert('데이터가 없습니다.'); return; }
-    const headers = ['번호','기업','시간','상태','대학','학번','성명','연락처','사전질문','신청시각'];
-    const rows = allData.map((r,i) => [i+1, DESK_NAMES[r.deskIdx], TIME_SLOTS[r.timeIdx], r.status, r.univ||r.actualUniv||'', r.studentId||'', r.name||'', r.phone||'', (r.preQuestion||'').replace(/"/g,'""'), r.appliedAt||'']);
+    // 학과, 학년 컬럼 추가
+    const headers = ['번호','기업','시간','상태','대학','학과','학년','학번','성명','연락처','사전질문','신청시각'];
+    const rows = allData.map((r,i) => [i+1, DESK_NAMES[r.deskIdx], TIME_SLOTS[r.timeIdx], r.status, r.univ||r.actualUniv||'', r.major||'', r.grade||'', r.studentId||'', r.name||'', r.phone||'', (r.preQuestion||'').replace(/"/g,'""'), r.appliedAt||'']);
     const csv = '\uFEFF' + [headers,...rows].map(row => row.map(v=>`"${v}"`).join(',')).join('\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
@@ -581,7 +579,7 @@
         <thead>
           <tr>
             <th>#</th><th>기업</th><th>시간</th><th>상태</th><th>작업</th>
-            <th>대학</th><th>학번</th><th>성명</th><th>연락처</th><th>사전질문</th><th>신청시각</th>
+            <th>대학</th><th>학과</th><th>학년</th><th>학번</th><th>성명</th><th>연락처</th><th>사전질문</th><th>신청시각</th>
           </tr>
         </thead>
         <tbody id="admin-tbody"></tbody>
