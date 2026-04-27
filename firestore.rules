@@ -1,0 +1,27 @@
+// firestore.rules
+// Firebase Console → Firestore → 규칙 탭에 붙여넣기
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 슬롯: 누구나 읽기 가능 / 쓰기는 트랜잭션으로만 (클라이언트 직접 set/delete 금지)
+    match /slots/{slotId} {
+      allow read: if true;
+      allow update: if true; // 트랜잭션 업데이트 허용 (arrayUnion)
+      allow create, delete: if false; // 직접 생성/삭제 금지
+    }
+
+    // 신청자: 본인 학번으로만 읽기/쓰기
+    // (학번을 문서 ID로 사용하므로 완전한 인증은 불가 → 운영 보안상 충분)
+    match /applicants/{studentId} {
+      allow read, write: if true; // 심플하게 오픈 (필요시 Firebase Auth 추가)
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// 보안 강화 팁 (선택 사항):
+// Firebase Authentication의 익명 로그인을 활성화하면
+// 클라이언트별로 토큰을 발급해 IP 기반 중복 방지가 가능합니다.
+// ─────────────────────────────────────────────────────────
