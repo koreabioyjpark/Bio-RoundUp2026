@@ -384,14 +384,19 @@
 
       const myReg  = (slotData.registrations || []).find(r => r.uid === currentUser.uid);
       const myWait = (slotData.waitlist || []).find(r => r.uid === currentUser.uid);
-      const myEntry = myReg || myWait;
       const status  = myReg ? 'regular' : (myWait ? `waitlist_${myWait.waitNum}` : 'unknown');
-      const currentQ = myEntry?.preQuestion || '';
+      const currentQ = (myReg || myWait)?.preQuestion || '';
 
+      // ★ 마이페이지 배지 디자인 변경 ★
       let statusBadge = '';
-      if (status === 'regular')                statusBadge = '<span class="badge badge-blue">정규 확정</span>';
-      else if (status.startsWith('waitlist'))  statusBadge = `<span class="badge badge-orange">예비 ${status.split('_')[1]}번</span>`;
-      else                                     statusBadge = '<span class="badge badge-gray">확인 필요</span>';
+      if (status === 'regular') {
+        statusBadge = '<span class="badge" style="background-color: #E1F0E8; color: #10B981; border: 1px solid #10B981;">상담 확정</span>';
+      } else if (status.startsWith('waitlist')) {
+        const num = status.split('_')[1];
+        statusBadge = `<span class="badge" style="background-color: #FFFBEB; color: #D97706; border: 1px solid #FDE68A;">예비 ${num}번</span>`;
+      } else {
+        statusBadge = '<span class="badge badge-gray">확인 필요</span>';
+      }
 
       return `
         <div class="mypage-card" id="card_${slotId}">
@@ -405,7 +410,7 @@
               <button class="cancel-btn" onclick="window._cancelSlot('${slotId}')">취소</button>
             </div>
           </div>
-          <div class="mypage-q-label">사전 질문 (수정 가능)</div>
+          <div class="mypage-q-label">사전 질문 (상담 전 수정 가능)</div>
           <textarea class="mypage-textarea" id="q_${slotId}" placeholder="멘토님에게 궁금한 점을 미리 작성해 두세요.">${currentQ}</textarea>
           <button class="save-q-btn" onclick="window._saveQuestion('${slotId}')">질문 저장</button>
         </div>`;
