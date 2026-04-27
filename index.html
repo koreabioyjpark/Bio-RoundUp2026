@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>2026년 라운드업 상담부스 신청</title>
+
+<meta property="og:title" content="2026년 첨단산업 인재양성 부트캠프 라운드업">
+<meta property="og:description" content="Round Up! 기업 멘토링 부스 신청 페이지입니다.">
+<meta property="og:image" content="협회.png">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&family=Bebas+Neue&display=swap" rel="stylesheet">
 
@@ -12,7 +17,6 @@
   import { getFirestore, doc, getDoc, setDoc, updateDoc, runTransaction, arrayUnion, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-  // ★ Firebase 설정 ★
   const firebaseConfig = {
     apiKey: "AIzaSyAziEj4z6Uo7TnZpFwCimaw4mOjyfjgRjI",
     authDomain: "bio-roundup-2026.firebaseapp.com",
@@ -33,7 +37,6 @@
   const db = getFirestore(app);
   const auth = getAuth(app);
 
-  // ── 전역 상태 ──
   let currentUser = null;
   let currentUserData = null;
   let slotsCache = {};
@@ -50,9 +53,6 @@
     return { type: 'closed', label: '마감', sub: '현장접수' };
   }
 
-  // ══════════════════════════════════════════
-  // 인증 상태 감지 → 화면 전환
-  // ══════════════════════════════════════════
   onAuthStateChanged(auth, async (user) => {
     if (user) {
       currentUser = user;
@@ -82,11 +82,6 @@
     const name = currentUserData?.name || currentUser.email;
     document.getElementById('user-name-display').textContent = `${name}님`;
 
-    // 이미 신청 데이터 있으면 폼에 자동 채우기
-    if (currentUserData) {
-      fillFormFromUserData(currentUserData);
-    }
-
     buildTable();
     subscribeSlots();
     updateSelectedSummary();
@@ -99,34 +94,19 @@
     renderMyPage();
   }
 
-  function fillFormFromUserData(data) {
-    if (data.hostUniv) {
-      const sel = document.getElementById('f-host-univ');
-      if (sel) sel.value = data.hostUniv;
-    }
-    if (data.actualUniv) document.getElementById('f-actual-univ').value = data.actualUniv;
-    if (data.studentId)  document.getElementById('f-studentid').value  = data.studentId;
-    if (data.name)       document.getElementById('f-name').value       = data.name;
-    if (data.phone)      document.getElementById('f-phone').value      = data.phone;
-    const emailEl = document.getElementById('f-email');
-    if (emailEl) emailEl.value = currentUser.email;
-  }
-
-  // ══════════════════════════════════════════
   // 회원가입
-  // ══════════════════════════════════════════
   async function handleRegister() {
-    const email    = document.getElementById('reg-email').value.trim();
-    const pw       = document.getElementById('reg-pw').value.trim();
-    const pwCheck  = document.getElementById('reg-pw-check').value.trim();
-    const hostUniv = document.getElementById('reg-host-univ').value;
-    const actualUniv = document.getElementById('reg-actual-univ').value.trim();
+    const email      = document.getElementById('reg-email').value.trim();
+    const pw         = document.getElementById('reg-pw').value.trim();
+    const pwCheck    = document.getElementById('reg-pw-check').value.trim();
+    const univSelect = document.getElementById('reg-univ').value;
+    const actualUniv = (univSelect === '기타') ? document.getElementById('reg-univ-direct').value.trim() : univSelect;
     const studentId  = document.getElementById('reg-studentid').value.trim();
     const name       = document.getElementById('reg-name').value.trim();
     const phone      = document.getElementById('reg-phone').value.trim();
     const agree      = document.getElementById('reg-agree').checked;
 
-    if (!email || !pw || !hostUniv || !actualUniv || !studentId || !name || !phone) {
+    if (!email || !pw || !actualUniv || !studentId || !name || !phone) {
       showToast('모든 항목을 입력해 주세요.', 'error'); return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -148,8 +128,13 @@
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, pw);
       await setDoc(doc(db, "applicants", cred.user.uid), {
-        uid: cred.user.uid, email, hostUniv, actualUniv,
-        studentId, name, phone, slots: [],
+        uid: cred.user.uid, 
+        email, 
+        univ: actualUniv, // 하나로 통합된 소속 대학
+        studentId, 
+        name, 
+        phone, 
+        slots: [],
         registeredAt: new Date().toISOString()
       });
       showToast('회원가입 완료! 자동으로 로그인됩니다.', 'success');
@@ -165,9 +150,7 @@
     }
   }
 
-  // ══════════════════════════════════════════
   // 로그인
-  // ══════════════════════════════════════════
   async function handleLogin() {
     const email = document.getElementById('login-email').value.trim();
     const pw    = document.getElementById('login-pw').value.trim();
@@ -192,18 +175,13 @@
     }
   }
 
-  // ══════════════════════════════════════════
   // 로그아웃
-  // ══════════════════════════════════════════
   async function handleLogout() {
     await signOut(auth);
     selectedSlots.clear();
     preQuestions = {};
   }
 
-  // ══════════════════════════════════════════
-  // 슬롯 구독 & UI
-  // ══════════════════════════════════════════
   function subscribeSlots() {
     for (let d = 0; d < 6; d++) {
       for (let t = 0; t < 6; t++) {
@@ -277,32 +255,18 @@
   };
   window._updateQ = (id, val) => { preQuestions[id] = val; };
 
-  // ══════════════════════════════════════════
   // 신청 제출
-  // ══════════════════════════════════════════
   async function handleSubmit() {
-    if (!currentUser) { showToast('로그인이 필요합니다.', 'error'); return; }
+    if (!currentUser || !currentUserData) { showToast('로그인이 필요합니다.', 'error'); return; }
 
-    const isParticipant = document.querySelector('input[name="is-participant"]:checked')?.value;
-    if (isParticipant === 'no')  { showToast('부트캠프 참여학생만 신청 가능합니다.', 'error'); return; }
-    if (isParticipant !== 'yes') { showToast('부트캠프 사업 참여 여부를 확인해 주세요.', 'error'); return; }
-
-    const hostUniv   = document.getElementById('f-host-univ').value;
-    const actualUniv = document.getElementById('f-actual-univ').value.trim();
-    const studentId  = document.getElementById('f-studentid').value.trim();
-    const name       = document.getElementById('f-name').value.trim();
-    const phone      = document.getElementById('f-phone').value.trim();
-    const email      = currentUser.email;
-    const agree      = document.getElementById('f-agree').checked;
-
-    if (!hostUniv || !actualUniv || !studentId || !name || !phone) {
-      showToast('모든 필수 항목을 입력해 주세요.', 'error'); return;
-    }
-    if (!agree) { showToast('개인정보 수집 및 이용에 동의해 주세요.', 'error'); return; }
     if (selectedSlots.size === 0) { showToast('신청할 상담 슬롯을 1개 이상 선택해 주세요.', 'error'); return; }
 
     const btn = document.getElementById('submit-btn');
     btn.disabled = true; btn.textContent = '신청 처리 중...';
+
+    // 회원가입 시 저장된 정보 활용 (폼 삭제됨)
+    const { univ, actualUniv, studentId, name, phone, email } = currentUserData;
+    const finalUniv = univ || actualUniv || '알 수 없음'; // 하위 호환
 
     try {
       const applicantRef = doc(db, "applicants", currentUser.uid);
@@ -316,7 +280,7 @@
         return;
       }
 
-      const applicantInfo = { uid: currentUser.uid, hostUniv, actualUniv, studentId, name, phone, email, appliedAt: new Date().toISOString() };
+      const applicantInfo = { uid: currentUser.uid, univ: finalUniv, studentId, name, phone, email, appliedAt: new Date().toISOString() };
       const results = [];
 
       for (const id of selectedSlots) {
@@ -329,7 +293,6 @@
           const reg  = slotData.registrations || [];
           const wait = slotData.waitlist || [];
 
-          // uid 기준 중복 체크 (같은 계정으로 이미 신청한 슬롯)
           const already = [...reg, ...wait].some(r => r.uid === currentUser.uid);
           if (already) { resultType = 'duplicate'; return; }
 
@@ -352,11 +315,7 @@
 
       const newSlotIds = results.filter(r => r.type !== 'duplicate' && r.type !== 'closed').map(r => r.id);
       if (newSlotIds.length > 0) {
-        await updateDoc(applicantRef, {
-          hostUniv, actualUniv, studentId, name, phone, email,
-          slots: arrayUnion(...newSlotIds)
-        });
-        // 로컬 캐시 갱신
+        await updateDoc(applicantRef, { slots: arrayUnion(...newSlotIds) });
         const refreshed = await getDoc(applicantRef);
         currentUserData = refreshed.data();
       }
@@ -392,9 +351,6 @@
     for (let d = 0; d < 6; d++) for (let t = 0; t < 6; t++) updateSlotUI(d, t);
   }
 
-  // ══════════════════════════════════════════
-  // 마이페이지 — 내 신청 내역
-  // ══════════════════════════════════════════
   async function renderMyPage() {
     if (!currentUser) return;
     const snap = await getDoc(doc(db, "applicants", currentUser.uid));
@@ -411,7 +367,7 @@
         <div class="mypage-info-grid">
           <div><span class="info-label">이름</span><span class="info-value">${currentUserData.name || '-'}</span></div>
           <div><span class="info-label">학번</span><span class="info-value">${currentUserData.studentId || '-'}</span></div>
-          <div><span class="info-label">소속 대학</span><span class="info-value">${currentUserData.actualUniv || '-'}</span></div>
+          <div><span class="info-label">소속 대학</span><span class="info-value">${currentUserData.univ || currentUserData.actualUniv || '-'}</span></div>
           <div><span class="info-label">이메일</span><span class="info-value">${currentUser.email}</span></div>
         </div>
       </div>`;
@@ -453,7 +409,6 @@
     container.innerHTML = userInfo + cards.join('');
   }
 
-  // 사전 질문 저장
   window._saveQuestion = async (slotId) => {
     const newQ = document.getElementById(`q_${slotId}`).value.trim();
     const slotRef = doc(db, "slots", slotId);
@@ -465,15 +420,8 @@
       if (!slotSnap.exists()) return;
       const data = slotSnap.data();
 
-      // registrations 배열에서 본인 항목 찾아서 업데이트
-      const updateArray = (arr) => arr.map(r =>
-        r.uid === currentUser.uid ? { ...r, preQuestion: newQ } : r
-      );
-
-      await updateDoc(slotRef, {
-        registrations: updateArray(data.registrations || []),
-        waitlist: updateArray(data.waitlist || [])
-      });
+      const updateArray = (arr) => arr.map(r => r.uid === currentUser.uid ? { ...r, preQuestion: newQ } : r);
+      await updateDoc(slotRef, { registrations: updateArray(data.registrations || []), waitlist: updateArray(data.waitlist || []) });
 
       btn.textContent = '✓ 저장됨';
       setTimeout(() => { btn.disabled = false; btn.textContent = '질문 저장'; }, 2000);
@@ -483,7 +431,6 @@
     }
   };
 
-  // 신청 취소
   window._cancelSlot = async (slotId) => {
     if (!confirm('정말 이 상담 신청을 취소하시겠습니까?')) return;
 
@@ -499,7 +446,6 @@
           waitlist:      (data.waitlist      || []).filter(r => r.uid !== currentUser.uid)
         });
       }
-      // applicants의 slots 배열에서도 제거
       const appSnap = await getDoc(applicantRef);
       if (appSnap.exists()) {
         const slots = (appSnap.data().slots || []).filter(s => s !== slotId);
@@ -509,14 +455,9 @@
 
       showToast('신청이 취소되었습니다.', 'success');
       renderMyPage();
-    } catch (e) {
-      showToast('취소 실패: ' + e.message, 'error');
-    }
+    } catch (e) { showToast('취소 실패: ' + e.message, 'error'); }
   };
 
-  // ══════════════════════════════════════════
-  // 테이블 빌드 & Toast
-  // ══════════════════════════════════════════
   function buildTable() {
     const thead = document.getElementById('table-head');
     const tbody = document.getElementById('table-body');
@@ -543,9 +484,6 @@
     setTimeout(() => t.classList.remove('show'), 3500);
   }
 
-  // ══════════════════════════════════════════
-  // 탭 전환 (로그인/회원가입)
-  // ══════════════════════════════════════════
   window.switchTab = (tab) => {
     document.getElementById('tab-login').classList.toggle('active', tab === 'login');
     document.getElementById('tab-register').classList.toggle('active', tab === 'register');
@@ -557,7 +495,6 @@
   window.showMainApp  = showMainApp;
   window.handleLogout = handleLogout;
 
-  // ── DOM 준비 후 이벤트 연결 ──
   window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('reg-btn').addEventListener('click', handleRegister);
@@ -566,16 +503,9 @@
       document.getElementById('result-modal').style.display = 'none';
     });
 
-    // 엔터키 로그인
     ['login-email','login-pw'].forEach(id => {
       document.getElementById(id)?.addEventListener('keydown', e => { if (e.key === 'Enter') handleLogin(); });
     });
-
-    document.querySelectorAll('input[name="is-participant"]').forEach(r =>
-      r.addEventListener('change', e => {
-        if (e.target.value === 'no') showToast('부트캠프 참여학생만 신청 가능합니다.', 'error');
-      })
-    );
   });
 </script>
 
@@ -601,15 +531,16 @@
 
   /* ── 히어로 ── */
   .hero { background: var(--surface); border-bottom: 1px solid var(--border); padding: 40px 20px 32px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.02); }
+  .hero-logo { height: 48px; margin-bottom: 24px; object-fit: contain; display: block; margin-left: auto; margin-right: auto; }
   .hero-badge { display: inline-block; background: var(--kbio-blue-light); color: var(--kbio-blue); font-size: 13px; font-weight: 700; padding: 6px 16px; border-radius: 20px; margin-bottom: 12px; }
   .hero h1 { font-size: clamp(22px, 5vw, 38px); font-weight: 900; color: var(--text-main); letter-spacing: -0.5px; margin-bottom: 16px; }
   .hero-info { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; max-width: 700px; margin: 0 auto; }
   .hero-info span { background: var(--surface2); border: 1px solid var(--border); padding: 6px 14px; border-radius: 6px; color: var(--text-sub); font-size: 13px; font-weight: 600; }
 
-  /* ── 유저바 ── */
-  #user-bar { display: none; background: var(--kbio-blue); color: #fff; padding: 10px 20px; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-  .user-bar-left { font-size: 14px; font-weight: 600; }
-  .user-bar-right { display: flex; gap: 8px; }
+  /* ── 유저바 중앙 정렬 수정 ── */
+  #user-bar { display: none; background: var(--kbio-blue); color: #fff; padding: 12px 20px; justify-content: center; align-items: center; flex-wrap: wrap; gap: 24px; }
+  .user-bar-left { font-size: 15px; font-weight: 600; }
+  .user-bar-right { display: flex; gap: 12px; }
   .bar-btn { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: #fff; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
   .bar-btn:hover { background: rgba(255,255,255,0.35); }
   .bar-btn-outline { background: transparent; }
@@ -628,7 +559,8 @@
   .auth-field input::placeholder { color: var(--text-light); }
   .auth-pw-hint { font-size: 12px; color: var(--text-light); margin-top: 4px; }
   .auth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .auth-privacy { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 12px; font-size: 12px; line-height: 1.7; color: var(--text-sub); max-height: 100px; overflow-y: auto; }
+  /* 개인정보 수집 및 이용동의 창 크기 확대 */
+  .auth-privacy { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 12px; font-size: 12px; line-height: 1.7; color: var(--text-sub); max-height: 200px; overflow-y: auto; }
   .auth-agree { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; font-size: 13px; font-weight: 600; color: var(--kbio-blue); }
   .auth-agree input { width: 18px; height: 18px; accent-color: var(--kbio-blue); }
   .auth-submit { width: 100%; background: var(--kbio-blue); color: #fff; border: none; border-radius: 8px; padding: 14px; font-size: 16px; font-weight: 700; cursor: pointer; font-family: inherit; transition: all 0.2s; }
@@ -643,32 +575,8 @@
   .section-title { display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 700; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid var(--border); }
   .step-badge { width: 28px; height: 28px; border-radius: 6px; background: var(--kbio-orange); color: #fff; font-size: 14px; font-weight: 900; display: flex; align-items: center; justify-content: center; }
 
-  .eligibility-box { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
-  .eligibility-box h4 { color: #D97706; margin-bottom: 10px; font-size: 16px; }
-  .eligibility-box p { font-size: 14px; color: var(--text-sub); margin-bottom: 10px; }
-  .eligibility-box ul { font-size: 13px; color: var(--kbio-blue); margin-bottom: 12px; margin-left: 20px; line-height: 1.8; }
-  .eligibility-box a { color: var(--kbio-blue); font-weight: 600; text-decoration: none; }
-  .eligibility-box a:hover { text-decoration: underline; }
-  .warning-text { font-size: 13px !important; color: var(--red) !important; font-weight: 600; margin-bottom: 16px !important; }
-  .radio-group { display: flex; flex-direction: column; gap: 10px; }
-  .radio-label { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; cursor: pointer; }
-  .radio-label input { width: 18px; height: 18px; accent-color: var(--kbio-blue); }
-
-  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
-  .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-sub); margin-bottom: 8px; }
-  .form-group label .req { color: var(--kbio-orange); }
-  .form-group input, .form-group select { width: 100%; background: var(--surface); border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px 16px; color: var(--text-main); font-size: 15px; transition: all 0.2s; font-family: inherit; }
-  .form-group input:focus, .form-group select:focus { border-color: var(--kbio-blue); box-shadow: 0 0 0 3px var(--kbio-blue-light); outline: none; }
-  .form-group input::placeholder { color: var(--text-light); }
-  .form-email-readonly { background: var(--surface2) !important; color: var(--text-sub) !important; cursor: not-allowed; }
-
-  .privacy-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-top: 24px; font-size: 13px; line-height: 1.6; color: var(--text-sub); }
-  .privacy-title { font-weight: 700; color: var(--text-main); margin-bottom: 12px; display: block; }
-  .privacy-list { margin-left: 16px; margin-bottom: 12px; }
-  .privacy-list li { margin-bottom: 4px; }
-  .agree-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 12px 16px; background: var(--kbio-blue-light); border-radius: 8px; border: 1px solid rgba(42,92,158,0.1); }
-  .agree-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--kbio-blue); cursor: pointer; }
-  .agree-row label { font-size: 14px; font-weight: 600; color: var(--kbio-blue); cursor: pointer; }
+  /* 공지사항 박스 스타일 */
+  .notice-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 24px; font-size: 14px; color: var(--text-sub); line-height: 1.7; }
 
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 24px; }
   .slot-table { width: 100%; border-collapse: collapse; min-width: 680px; background: var(--surface); }
@@ -765,9 +673,8 @@
 </head>
 <body>
 
-<!-- ── 히어로 헤더 ── -->
 <header class="hero">
-  <img src="협회.png" alt="한국바이오협회 로고" style="height:48px; margin-bottom:20px; object-fit:contain;">
+  <img src="협회.png" alt="한국바이오협회 로고" class="hero-logo">
   <div class="hero-badge">2026년 첨단산업 인재양성 부트캠프사업</div>
   <h1>Round Up! 기업 멘토링 부스 신청</h1>
   <div class="hero-info">
@@ -777,7 +684,6 @@
   </div>
 </header>
 
-<!-- ── 유저바 (로그인 후) ── -->
 <div id="user-bar">
   <div class="user-bar-left">👤 <span id="user-name-display"></span> 로그인 중</div>
   <div class="user-bar-right">
@@ -786,9 +692,6 @@
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════
-     인증 화면 (로그인 / 회원가입)
-══════════════════════════════════════════ -->
 <div id="auth-screen">
   <div class="auth-box">
     <div class="auth-tabs">
@@ -796,7 +699,6 @@
       <div class="auth-tab" id="tab-register" onclick="switchTab('register')">회원가입</div>
     </div>
 
-    <!-- 로그인 폼 -->
     <div id="login-form">
       <div class="auth-field">
         <label>이메일 <span class="req">*</span></label>
@@ -810,7 +712,6 @@
       <div class="auth-divider">계정이 없으신가요? <a href="#" onclick="switchTab('register')" style="color:var(--kbio-blue);font-weight:700;">회원가입</a></div>
     </div>
 
-    <!-- 회원가입 폼 -->
     <div id="register-form" style="display:none;">
       <div class="auth-field">
         <label>이메일 (아이디) <span class="req">*</span></label>
@@ -829,18 +730,19 @@
       </div>
       <div class="auth-grid">
         <div class="auth-field">
-          <label>참여 사업단 (주관대학) <span class="req">*</span></label>
-          <select id="reg-host-univ">
+          <label>소속 대학 <span class="req">*</span></label>
+          <select id="reg-univ" onchange="document.getElementById('reg-univ-direct-wrap').style.display = this.value === '기타' ? 'block' : 'none';">
             <option value="">선택</option>
-            <option value="가천대학교">가천대학교 부트캠프</option>
-            <option value="영남대학교">영남대학교 부트캠프</option>
-            <option value="충남대학교">충남대학교 부트캠프</option>
-            <option value="한남대학교">한남대학교 부트캠프</option>
+            <option value="가천대학교">가천대학교</option>
+            <option value="영남대학교">영남대학교</option>
+            <option value="충남대학교">충남대학교</option>
+            <option value="한남대학교">한남대학교</option>
+            <option value="기타">기타 (직접 입력)</option>
           </select>
         </div>
-        <div class="auth-field">
-          <label>실제 소속 대학 <span class="req">*</span></label>
-          <input id="reg-actual-univ" type="text" placeholder="예) 한밭대학교">
+        <div class="auth-field" id="reg-univ-direct-wrap" style="display:none;">
+          <label>소속 대학 직접 입력 <span class="req">*</span></label>
+          <input id="reg-univ-direct" type="text" placeholder="예) 한국대학교">
         </div>
       </div>
       <div class="auth-grid">
@@ -856,6 +758,9 @@
       <div class="auth-field">
         <label>휴대전화번호 <span class="req">*</span></label>
         <input id="reg-phone" type="tel" placeholder="010-0000-0000">
+      </div>
+      <div style="font-size: 13px; color: var(--red); font-weight: 700; margin-bottom: 20px; text-align: center;">
+        ※ 부트캠프 사업단 참여학생만 행사 신청 가능합니다.
       </div>
       <div class="auth-privacy">
         <strong>개인정보 수집 및 이용 동의</strong><br><br>
@@ -874,85 +779,22 @@
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════
-     메인 신청 화면
-══════════════════════════════════════════ -->
 <div id="main-app">
   <main class="container">
+
     <div class="section">
       <div class="section-title">
-        <span class="step-badge">1</span>
-        참여자 정보 확인
+        <span class="step-badge" style="background-color: var(--kbio-blue);">i</span>
+        공지사항
       </div>
-
-      <div class="eligibility-box">
-        <h4>🚨 신청 자격 확인</h4>
-        <p>본 행사는 교육부 소관의 "첨단산업 인재양성 부트캠프사업"의 아래 <strong>바이오분야 주관대학 4개교 사업에 참여하는 학생</strong>만 신청 가능합니다.</p>
-        <ul>
-          <li><a href="https://biobootcamp.gachon.ac.kr" target="_blank">가천대학교 부트캠프 사업단</a></li>
-          <li><a href="https://biobootcamp.yu.ac.kr" target="_blank">영남대학교 부트캠프 사업단</a></li>
-          <li><a href="http://cnubiobc.kr" target="_blank">충남대학교 부트캠프 사업단</a></li>
-          <li><a href="https://biobootcamp.hannam.ac.kr" target="_blank">한남대학교 부트캠프 사업단</a></li>
-        </ul>
-        <p class="warning-text">※ 추후 확인 후 부트캠프 참여 학생이 아닐 경우 통보 없이 취소될 수 있습니다.</p>
-        <div class="radio-group">
-          <label class="radio-label"><input type="radio" name="is-participant" value="yes"> 예, 부트캠프 참여 학생이 맞습니다.</label>
-          <label class="radio-label"><input type="radio" name="is-participant" value="no"> 아니오</label>
-        </div>
-      </div>
-
-      <div class="form-grid">
-        <div class="form-group">
-          <label>참여 중인 사업단 (주관대학) <span class="req">*</span></label>
-          <select id="f-host-univ">
-            <option value="">사업단을 선택해 주세요</option>
-            <option value="가천대학교">가천대학교 부트캠프</option>
-            <option value="영남대학교">영남대학교 부트캠프</option>
-            <option value="충남대학교">충남대학교 부트캠프</option>
-            <option value="한남대학교">한남대학교 부트캠프</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>실제 소속 대학 (참여대학) <span class="req">*</span></label>
-          <input id="f-actual-univ" type="text" placeholder="예) 한밭대학교">
-        </div>
-        <div class="form-group">
-          <label>학번 <span class="req">*</span></label>
-          <input id="f-studentid" type="text" placeholder="예) 202312345">
-        </div>
-        <div class="form-group">
-          <label>성명 <span class="req">*</span></label>
-          <input id="f-name" type="text" placeholder="실명을 입력해 주세요">
-        </div>
-        <div class="form-group">
-          <label>휴대전화번호 <span class="req">*</span></label>
-          <input id="f-phone" type="tel" placeholder="010-0000-0000">
-        </div>
-        <div class="form-group">
-          <label>이메일</label>
-          <input id="f-email" type="email" class="form-email-readonly" readonly placeholder="로그인 이메일 자동 입력">
-        </div>
-      </div>
-
-      <div class="privacy-box">
-        <span class="privacy-title">[필수] 개인정보 수집 및 이용 동의 안내</span>
-        한국바이오협회는 본 행사의 원활한 운영을 위해 아래와 같이 개인정보를 수집 및 이용합니다.<br><br>
-        <ul class="privacy-list">
-          <li><strong>수집 항목:</strong> 소속 대학, 학번, 성명, 휴대전화번호, 이메일</li>
-          <li><strong>이용 목적:</strong> 상담부스 신청 접수 확인, 일정 안내, 현장 본인 확인 및 사후 통계</li>
-          <li><strong>보유 기간:</strong> <strong>행사 종료 후 1년 후 파기</strong></li>
-        </ul>
-        귀하는 개인정보 수집 및 이용 동의를 거부할 권리가 있으나, 미동의 시 상담 예약 및 행사 참여가 제한됩니다.
-      </div>
-      <div class="agree-row">
-        <input type="checkbox" id="f-agree">
-        <label for="f-agree">위 개인정보 수집 및 이용 내용에 동의합니다.</label>
+      <div class="notice-box">
+        ※ 행사에 대한 세부 안내사항이 추후 이곳에 공지될 예정입니다.<br>
       </div>
     </div>
 
     <div class="section">
       <div class="section-title">
-        <span class="step-badge">2</span>
+        <span class="step-badge">1</span>
         상담 슬롯 선택 <span style="font-size:14px;font-weight:500;color:var(--text-light);margin-left:8px;">(최대 3개 시간대 선택 가능)</span>
       </div>
       <div class="table-wrap">
@@ -983,9 +825,6 @@
   </main>
 </div>
 
-<!-- ══════════════════════════════════════════
-     마이페이지 — 내 신청 내역
-══════════════════════════════════════════ -->
 <div id="mypage-screen">
   <div class="mypage-container">
     <div class="mypage-header">
