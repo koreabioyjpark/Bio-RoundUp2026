@@ -31,7 +31,7 @@
   };
 
   const DESK_NAMES = ["기업 1","기업 2","기업 3","기업 4","기업 5","기업 6"];
-  const TIME_SLOTS = ["14:00~14:20","14:20~14:40","14:40~15:00","15:00~15:20","15:20~15:40","15:40~16:00"];
+  const TIME_SLOTS = ["13:40~14:00", "14:00~14:20", "14:20~14:40", "15:00~15:20", "15:20~15:40", "15:40~16:00"];
   const MAX_REGULAR = 3;
   const MAX_WAITLIST = 3;
   const MAX_PER_PERSON = 3;
@@ -131,9 +131,8 @@
     const univSelect = document.getElementById('reg-univ').value;
     const actualUniv = (univSelect === '기타') ? document.getElementById('reg-univ-direct').value.trim() : univSelect;
     const studentId = document.getElementById('reg-studentid').value.trim();
-    // 1. 변수 수집 부분에 major, grade 추가
-    const major = document.getElementById('reg-major').value.trim(); // 추가
-    const grade = document.getElementById('reg-grade').value; // 추가
+    const major = document.getElementById('reg-major').value.trim(); 
+    const grade = document.getElementById('reg-grade').value; 
     const name = document.getElementById('reg-name').value.trim();
     const phone = document.getElementById('reg-phone').value.trim();
     const agree = document.getElementById('reg-agree').checked;
@@ -204,7 +203,6 @@
     const id = slotId(deskIdx, timeIdx);
     if (getSlotStatus(slotsCache[id] || {}).type === 'closed') return;
 
-    // ★ 유저가 이미 신청(확정/예비)한 상태라면 클릭 방지
     if (currentUserData?.slots?.includes(id)) {
       showToast('이미 신청하신 기업/시간대입니다. (마이페이지 확인)', 'error');
       return;
@@ -217,7 +215,6 @@
         showToast('같은 시간대에는 하나의 기업만 선택할 수 있습니다.', 'error'); return;
       }
       
-      // ★ 3개 제한 완벽 복구 (기존 신청 개수 + 현재 선택 개수)
       const bookedCount = currentUserData?.slots?.length || 0;
       if (selectedSlots.size + bookedCount >= MAX_PER_PERSON) {
         showToast(`최대 ${MAX_PER_PERSON}개까지만 신청 가능합니다. (이미 ${bookedCount}개 신청됨)`, 'error'); 
@@ -263,7 +260,6 @@
     if (!currentUser || !currentUserData) { showToast('로그인이 필요합니다.', 'error'); return; }
     if (selectedSlots.size === 0) { showToast('신청할 상담 슬롯을 1개 이상 선택해 주세요.', 'error'); return; }
 
-    // ★ 3개 제한 제출단 방어 로직 (이중 보안)
     const bookedCount = currentUserData?.slots?.length || 0;
     if (selectedSlots.size + bookedCount > MAX_PER_PERSON) {
       showToast(`신청 횟수를 초과했습니다. (최대 ${MAX_PER_PERSON}개)`, 'error');
@@ -273,7 +269,6 @@
     const btn = document.getElementById('submit-btn');
     btn.disabled = true; btn.textContent = '실시간 정원 확인 중...';
 
-    // ★ 학과(major), 학년(grade) 추가 수집
     const { univ, major, grade, studentId, name, phone, email } = currentUserData;
     const applicantInfo = { 
       uid: currentUser.uid, 
@@ -295,7 +290,6 @@
 
         await runTransaction(db, async (transaction) => {
           const slotSnap = await transaction.get(slotRef);
-          // 슬롯이 없으면 빈 배열로 가상 초기화
           const slotData = slotSnap.exists() ? slotSnap.data() : { registrations: [], waitlist: [] };
           const reg  = slotData.registrations || [];
           const wait = slotData.waitlist || [];
@@ -310,13 +304,11 @@
 
           if (wait.length === 0 && reg.length < MAX_REGULAR) {
             const newRegs = [...reg, newEntry];
-            // ★ 방이 없으면 알아서 만들고 합치기 (set + merge)
             transaction.set(slotRef, { registrations: newRegs }, { merge: true });
             resultType = 'regular';
           } else if (wait.length < MAX_WAITLIST) {
             const waitNum = wait.length + 1;
             const newWaitlist = [...wait, { ...newEntry, waitNum }];
-            // ★ 방이 없으면 알아서 만들고 합치기 (set + merge)
             transaction.set(slotRef, { waitlist: newWaitlist }, { merge: true });
             resultType = `waitlist_${waitNum}`;
           } else {
@@ -672,7 +664,7 @@
   <div class="hero-badge">2026년 첨단산업 인재양성 부트캠프사업</div>
   <h1>Round Up! 기업 멘토링 부스 신청</h1>
   <div class="hero-info">
-    <span>🗓 2026. 10. 30.(금) 14:00~16:00</span>
+    <span>🗓 2026. 10. 30.(금) 13:40~16:00</span>
     <span>📍 코엑스 3층 컨퍼런스룸</span>
     <span>💡 1인 최대 3개 시간대 선택 가능 (동시간대 중복 불가)</span>
   </div>
